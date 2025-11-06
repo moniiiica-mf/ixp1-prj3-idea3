@@ -157,52 +157,52 @@
     .swipe-flash {
       position: fixed;
       pointer-events: none;
-      animation: flash 0.5s ease-out forwards;
+      animation: flash 0.4s ease-out forwards;
       z-index: 50;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 48px;
-      font-weight: bold;
-      color: #fff;
-      text-shadow: 0 0 20px rgba(74, 158, 255, 1);
+      font-size: 20px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.8);
+      text-shadow: 0 0 10px rgba(74, 158, 255, 0.5);
     }
 
     .swipe-flash.left {
       left: 0;
       top: 0;
       bottom: 0;
-      width: 150px;
-      background: linear-gradient(to right, rgba(74, 158, 255, 0.8), transparent);
+      width: 80px;
+      background: linear-gradient(to right, rgba(74, 158, 255, 0.3), transparent);
     }
 
     .swipe-flash.right {
       right: 0;
       top: 0;
       bottom: 0;
-      width: 150px;
-      background: linear-gradient(to left, rgba(74, 158, 255, 0.8), transparent);
+      width: 80px;
+      background: linear-gradient(to left, rgba(74, 158, 255, 0.3), transparent);
     }
 
     .swipe-flash.up {
       top: 0;
       left: 0;
       right: 0;
-      height: 150px;
-      background: linear-gradient(to bottom, rgba(74, 158, 255, 0.8), transparent);
+      height: 80px;
+      background: linear-gradient(to bottom, rgba(74, 158, 255, 0.3), transparent);
     }
 
     .swipe-flash.down {
       bottom: 0;
       left: 0;
       right: 0;
-      height: 150px;
-      background: linear-gradient(to top, rgba(74, 158, 255, 0.8), transparent);
+      height: 80px;
+      background: linear-gradient(to top, rgba(74, 158, 255, 0.3), transparent);
     }
 
     @keyframes flash {
-      0% { opacity: 1; transform: scale(1); }
-      100% { opacity: 0; transform: scale(1.2); }
+      0% { opacity: 0.8; }
+      100% { opacity: 0; }
     }
 
     .tap-indicator {
@@ -227,18 +227,18 @@
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      font-size: 80px;
-      font-weight: bold;
-      color: #ffaa4a;
-      text-shadow: 0 0 30px rgba(255, 170, 74, 1);
+      font-size: 32px;
+      font-weight: 500;
+      color: rgba(255, 170, 74, 0.9);
+      text-shadow: 0 0 15px rgba(255, 170, 74, 0.4);
       pointer-events: none;
-      animation: zoom-fade 0.6s ease-out forwards;
+      animation: zoom-fade 0.5s ease-out forwards;
       z-index: 60;
     }
 
     @keyframes zoom-fade {
-      0% { opacity: 1; transform: translate(-50%, -50%) scale(0.5); }
-      50% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
+      0% { opacity: 0.8; transform: translate(-50%, -50%) scale(0.8); }
+      30% { opacity: 0.9; transform: translate(-50%, -50%) scale(1); }
       100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
     }
   </style>
@@ -766,38 +766,54 @@
       return null;
     }
 
-    // Detect single-hand zoom based on hand spread changes
+    // Detect single-hand zoom based on index+middle finger spread (开花 gesture)
     function detectSingleHandZoom(hand) {
-      if (!hand.handSpread) return null;
+      const landmarks = hand.landmarks;
 
-      const handId = hand.id;
-      const currentSpread = hand.handSpread;
+      // Measure tip-to-pip distances for index and middle fingers
+      const indexTip = landmarks[LANDMARKS.INDEX_TIP];
+      const indexPip = landmarks[LANDMARKS.INDEX_PIP];
+      const middleTip = landmarks[LANDMARKS.MIDDLE_TIP];
+      const middlePip = landmarks[LANDMARKS.MIDDLE_PIP];
 
-      if (!hand.prevSpread) {
-        hand.prevSpread = currentSpread;
+      const indexSpread = distance(indexTip, indexPip);
+      const middleSpread = distance(middleTip, middlePip);
+
+      // Average spread
+      const currentSpread = (indexSpread + middleSpread) / 2;
+
+      // Initialize baseline
+      if (!hand.baselineSpread) {
+        hand.baselineSpread = currentSpread;
+        hand.lastSpread = currentSpread;
         hand.zoomStartTime = Date.now();
         return null;
       }
 
-      const spreadDelta = currentSpread - hand.prevSpread;
+      const spreadChange = currentSpread - hand.lastSpread;
       const duration = Date.now() - (hand.zoomStartTime || 0);
 
-      // Detect significant spread change (zoom gesture)
-      if (Math.abs(spreadDelta) > CONFIG.zoomSpreadThreshold && duration > 100) {
-        hand.prevSpread = currentSpread;
+      // Detect significant simultaneous spread change (both fingers)
+      const threshold = hand.baselineSpread * 0.15; // 15% change threshold
+
+      if (Math.abs(spreadChange) > threshold && duration > 150) {
+        hand.lastSpread = currentSpread;
         hand.zoomStartTime = Date.now();
 
-        const factor = 1 + spreadDelta * 2; // Amplify the zoom effect
+        // Update baseline with slow adaptation
+        hand.baselineSpread = hand.baselineSpread * 0.95 + currentSpread * 0.05;
+
+        const factor = 1 + spreadChange * 8; // Amplify sensitivity
 
         return {
-          mode: spreadDelta > 0 ? 'in' : 'out',
+          mode: spreadChange > 0 ? 'out' : 'in', // Spread = zoom out, contract = zoom in
           factor,
           source: 'single-hand'
         };
       }
 
       // Smooth update
-      hand.prevSpread = currentSpread * 0.1 + hand.prevSpread * 0.9;
+      hand.lastSpread = currentSpread * 0.2 + hand.lastSpread * 0.8;
       return null;
     }
 
@@ -1049,24 +1065,41 @@
       for (const hand of state.hands.values()) {
         const { landmarks, handedness, palm, velocity, gesture, gestureConfidence } = hand;
 
-        // Helper to convert landmark to canvas coordinates
+        // Helper to convert landmark to canvas coordinates with precise mapping
         const landmarkToCanvas = (lm) => {
-          // Landmarks are already in normalized coords (0-1)
-          // Mirror x for natural interaction
+          // MediaPipe landmarks: x (0=left, 1=right), y (0=top, 1=bottom), z (depth)
+          // Canvas needs mirroring for natural interaction
           const x = CONFIG.mirrorVideo ? (1 - lm.x) * ctx.canvas.width : lm.x * ctx.canvas.width;
           const y = lm.y * ctx.canvas.height;
-          return { x, y };
+          return { x: Math.round(x), y: Math.round(y) }; // Round to pixel boundaries for crisp rendering
         };
 
-        // Draw skeleton
+        // Draw skeleton connections
         if (CONFIG.draw.skeleton) {
-          ctx.strokeStyle = handedness === 'Left' ? '#4a9eff' : '#ff4a9e';
-          ctx.lineWidth = 3;
+          ctx.lineWidth = 2.5;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
 
           HAND_CONNECTIONS.forEach(([start, end]) => {
             const p1 = landmarkToCanvas(landmarks[start]);
             const p2 = landmarkToCanvas(landmarks[end]);
 
+            // Color based on finger group for better visibility
+            let strokeColor = handedness === 'Left' ? 'rgba(74, 158, 255, 0.7)' : 'rgba(255, 74, 158, 0.7)';
+
+            if ((start >= 1 && start <= 4) || (end >= 1 && end <= 4)) {
+              strokeColor = 'rgba(255, 107, 107, 0.7)'; // Thumb - red
+            } else if ((start >= 5 && start <= 8) || (end >= 5 && end <= 8)) {
+              strokeColor = 'rgba(74, 255, 74, 0.7)'; // Index - green
+            } else if ((start >= 9 && start <= 12) || (end >= 9 && end <= 12)) {
+              strokeColor = 'rgba(74, 158, 255, 0.7)'; // Middle - blue
+            } else if ((start >= 13 && start <= 16) || (end >= 13 && end <= 16)) {
+              strokeColor = 'rgba(255, 74, 255, 0.7)'; // Ring - magenta
+            } else if ((start >= 17 && start <= 20) || (end >= 17 && end <= 20)) {
+              strokeColor = 'rgba(255, 170, 74, 0.7)'; // Pinky - orange
+            }
+
+            ctx.strokeStyle = strokeColor;
             ctx.beginPath();
             ctx.moveTo(p1.x, p1.y);
             ctx.lineTo(p2.x, p2.y);
@@ -1074,12 +1107,12 @@
           });
         }
 
-        // Draw landmarks (joints)
+        // Draw landmarks (joints) with improved precision
         if (CONFIG.draw.landmarks) {
           landmarks.forEach((lm, idx) => {
             const pos = landmarkToCanvas(lm);
 
-            // Different colors for different finger groups
+            // Color coding by finger
             let color = handedness === 'Left' ? '#4a9eff' : '#ff4a9e';
             if (idx === LANDMARKS.WRIST) color = '#ffff00'; // Yellow for wrist
             else if (idx >= 1 && idx <= 4) color = '#ff6b6b'; // Red for thumb
@@ -1088,25 +1121,36 @@
             else if (idx >= 13 && idx <= 16) color = '#ff4aff'; // Magenta for ring
             else if (idx >= 17 && idx <= 20) color = '#ffaa4a'; // Orange for pinky
 
+            // Draw joint with shadow for depth
+            const radius = idx === LANDMARKS.WRIST ? 7 : 4.5;
+
+            // Shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.beginPath();
+            ctx.arc(pos.x + 1, pos.y + 1, radius + 0.5, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // Main joint
             ctx.fillStyle = color;
             ctx.beginPath();
-            const radius = idx === LANDMARKS.WRIST ? 8 : 5;
             ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
             ctx.fill();
 
             // White border for better visibility
             ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 1;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
             ctx.stroke();
 
             // Draw index numbers
             if (CONFIG.draw.labels) {
               ctx.fillStyle = '#fff';
-              ctx.font = 'bold 11px monospace';
+              ctx.font = 'bold 10px monospace';
               ctx.strokeStyle = '#000';
-              ctx.lineWidth = 3;
-              ctx.strokeText(idx, pos.x + 10, pos.y - 8);
-              ctx.fillText(idx, pos.x + 10, pos.y - 8);
+              ctx.lineWidth = 2.5;
+              ctx.strokeText(idx, pos.x + 9, pos.y - 7);
+              ctx.fillText(idx, pos.x + 9, pos.y - 7);
             }
           });
         }
@@ -1114,20 +1158,22 @@
         // Draw gesture badge
         if (CONFIG.draw.labels && gestureConfidence >= CONFIG.minConfidence) {
           const wristPos = landmarkToCanvas(landmarks[LANDMARKS.WRIST]);
-          const badgeY = wristPos.y + 50;
+          const badgeY = wristPos.y + 45;
           const badgeX = wristPos.x;
 
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-          ctx.fillRect(badgeX - 60, badgeY - 25, 120, 35);
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+          ctx.beginPath();
+          ctx.roundRect(badgeX - 55, badgeY - 23, 110, 33, 6);
+          ctx.fill();
 
           ctx.fillStyle = '#fff';
-          ctx.font = 'bold 16px sans-serif';
+          ctx.font = 'bold 15px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText(gesture, badgeX, badgeY - 5);
+          ctx.fillText(gesture, badgeX, badgeY - 4);
 
-          ctx.font = '12px sans-serif';
+          ctx.font = '11px sans-serif';
           ctx.fillStyle = '#4aff4a';
-          ctx.fillText(`${(gestureConfidence * 100).toFixed(0)}%`, badgeX, badgeY + 10);
+          ctx.fillText(`${(gestureConfidence * 100).toFixed(0)}%`, badgeX, badgeY + 9);
         }
       }
     }
