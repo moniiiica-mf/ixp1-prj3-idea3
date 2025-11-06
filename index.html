@@ -889,9 +889,9 @@
     // ========================================
     function updateHands(results, dt) {
       const newHands = new Map();
-      // Use video dimensions (CSS pixels), not canvas internal dimensions
-      const width = state.videoWidth || canvas.width;
-      const height = state.videoHeight || canvas.height;
+      // Use display dimensions for coordinate conversion
+      const width = state.videoDisplayWidth || canvas.width;
+      const height = state.videoDisplayHeight || canvas.height;
 
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         results.multiHandLandmarks.forEach((landmarks, idx) => {
@@ -1093,23 +1093,14 @@
     // DRAWING / OVERLAY
     // ========================================
     function drawHands(ctx) {
-      // Clear with proper dimensions
-      const vw = state.videoWidth || canvas.width;
-      const vh = state.videoHeight || canvas.height;
+      // Use display dimensions for drawing
+      const vw = state.videoDisplayWidth || canvas.width;
+      const vh = state.videoDisplayHeight || canvas.height;
 
       ctx.clearRect(0, 0, vw, vh);
 
       for (const hand of state.hands.values()) {
         const { landmarks, handedness, gesture, gestureConfidence } = hand;
-
-        // Save context state
-        ctx.save();
-
-        // Apply mirroring transform if needed
-        if (CONFIG.mirrorVideo) {
-          ctx.translate(vw, 0);
-          ctx.scale(-1, 1);
-        }
 
         // Helper to convert normalized MediaPipe coords to video pixel coords
         const toPx = (lm) => {
@@ -1120,9 +1111,29 @@
           };
         };
 
+        // Helper to convert coords for text (handles mirroring)
+        const toPxText = (lm) => {
+          const x = lm.x * vw;
+          const y = lm.y * vh;
+          // If mirroring, flip x coordinate for text position
+          return {
+            x: CONFIG.mirrorVideo ? vw - x : x,
+            y: y
+          };
+        };
+
+        // ===== DRAW SKELETON AND JOINTS (WITH MIRRORING) =====
+        ctx.save();
+
+        // Apply mirroring transform for skeleton
+        if (CONFIG.mirrorVideo) {
+          ctx.translate(vw, 0);
+          ctx.scale(-1, 1);
+        }
+
         // Draw skeleton connections
         if (CONFIG.draw.skeleton) {
-          ctx.lineWidth = 2.5;
+          ctx.lineWidth = 3;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
 
@@ -1131,18 +1142,18 @@
             const p2 = toPx(landmarks[end]);
 
             // Color based on finger group
-            let strokeColor = 'rgba(74, 158, 255, 0.7)';
+            let strokeColor = 'rgba(74, 158, 255, 0.8)';
 
             if ((start >= 1 && start <= 4) || (end >= 1 && end <= 4)) {
-              strokeColor = 'rgba(255, 107, 107, 0.7)'; // Thumb - red
+              strokeColor = 'rgba(255, 107, 107, 0.8)'; // Thumb - red
             } else if ((start >= 5 && start <= 8) || (end >= 5 && end <= 8)) {
-              strokeColor = 'rgba(74, 255, 74, 0.7)'; // Index - green
+              strokeColor = 'rgba(74, 255, 74, 0.8)'; // Index - green
             } else if ((start >= 9 && start <= 12) || (end >= 9 && end <= 12)) {
-              strokeColor = 'rgba(74, 158, 255, 0.7)'; // Middle - blue
+              strokeColor = 'rgba(74, 158, 255, 0.8)'; // Middle - blue
             } else if ((start >= 13 && start <= 16) || (end >= 13 && end <= 16)) {
-              strokeColor = 'rgba(255, 74, 255, 0.7)'; // Ring - magenta
+              strokeColor = 'rgba(255, 74, 255, 0.8)'; // Ring - magenta
             } else if ((start >= 17 && start <= 20) || (end >= 17 && end <= 20)) {
-              strokeColor = 'rgba(255, 170, 74, 0.7)'; // Pinky - orange
+              strokeColor = 'rgba(255, 170, 74, 0.8)'; // Pinky - orange
             }
 
             ctx.strokeStyle = strokeColor;
@@ -1167,12 +1178,12 @@
             else if (idx >= 13 && idx <= 16) color = '#ff4aff'; // Magenta for ring
             else if (idx >= 17 && idx <= 20) color = '#ffaa4a'; // Orange for pinky
 
-            const radius = idx === LANDMARKS.WRIST ? 6 : 4;
+            const radius = idx === LANDMARKS.WRIST ? 8 : 5;
 
             // Shadow for depth
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
             ctx.beginPath();
-            ctx.arc(pos.x + 1, pos.y + 1, radius + 0.5, 0, 2 * Math.PI);
+            ctx.arc(pos.x + 1.5, pos.y + 1.5, radius + 0.5, 0, 2 * Math.PI);
             ctx.fill();
 
             // Main joint
@@ -1183,46 +1194,52 @@
 
             // White border
             ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
             ctx.stroke();
-
-            // Draw index numbers
-            if (CONFIG.draw.labels) {
-              ctx.fillStyle = '#fff';
-              ctx.font = 'bold 9px monospace';
-              ctx.strokeStyle = '#000';
-              ctx.lineWidth = 2;
-              ctx.strokeText(idx, pos.x + 8, pos.y - 6);
-              ctx.fillText(idx, pos.x + 8, pos.y - 6);
-            }
           });
         }
 
-        // Draw gesture badge
+        ctx.restore(); // End mirrored drawing
+
+        // ===== DRAW TEXT (WITHOUT MIRRORING) =====
+
+        // Draw index numbers (not mirrored)
+        if (CONFIG.draw.labels) {
+          landmarks.forEach((lm, idx) => {
+            const pos = toPxText(lm);
+
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 11px monospace';
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 3;
+            ctx.textAlign = 'left';
+            ctx.strokeText(idx, pos.x + 10, pos.y - 8);
+            ctx.fillText(idx, pos.x + 10, pos.y - 8);
+          });
+        }
+
+        // Draw gesture badge (not mirrored)
         if (CONFIG.draw.labels && gestureConfidence >= CONFIG.minConfidence) {
-          const wristPos = toPx(landmarks[LANDMARKS.WRIST]);
-          const badgeY = wristPos.y + 40;
+          const wristPos = toPxText(landmarks[LANDMARKS.WRIST]);
+          const badgeY = wristPos.y + 50;
           const badgeX = wristPos.x;
 
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
           ctx.beginPath();
-          ctx.roundRect(badgeX - 50, badgeY - 20, 100, 30, 5);
+          ctx.roundRect(badgeX - 55, badgeY - 22, 110, 34, 6);
           ctx.fill();
 
           ctx.fillStyle = '#fff';
-          ctx.font = 'bold 14px sans-serif';
+          ctx.font = 'bold 16px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText(gesture, badgeX, badgeY - 3);
+          ctx.fillText(gesture, badgeX, badgeY - 2);
 
-          ctx.font = '10px sans-serif';
+          ctx.font = '12px sans-serif';
           ctx.fillStyle = '#4aff4a';
-          ctx.fillText(`${(gestureConfidence * 100).toFixed(0)}%`, badgeX, badgeY + 9);
+          ctx.fillText(`${(gestureConfidence * 100).toFixed(0)}%`, badgeX, badgeY + 12);
         }
-
-        // Restore context state (undo mirroring)
-        ctx.restore();
       }
     }
 
@@ -1502,23 +1519,41 @@
           }
         });
 
-        // Get actual video dimensions
-        const vw = video.videoWidth;
-        const vh = video.videoHeight;
+        // Get video native dimensions
+        const videoNativeWidth = video.videoWidth;
+        const videoNativeHeight = video.videoHeight;
+
+        // Calculate actual displayed video size (it fills viewport maintaining aspect ratio)
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const videoAspect = videoNativeWidth / videoNativeHeight;
+        const viewportAspect = viewportWidth / viewportHeight;
+
+        let displayWidth, displayHeight;
+        if (videoAspect > viewportAspect) {
+          // Video is wider - height fills viewport
+          displayHeight = viewportHeight;
+          displayWidth = displayHeight * videoAspect;
+        } else {
+          // Video is taller - width fills viewport
+          displayWidth = viewportWidth;
+          displayHeight = displayWidth / videoAspect;
+        }
+
         const dpr = window.devicePixelRatio || 1;
 
-        // Store video dimensions for coordinate mapping
-        state.videoWidth = vw;
-        state.videoHeight = vh;
+        // Store dimensions for coordinate mapping
+        state.videoNativeWidth = videoNativeWidth;
+        state.videoNativeHeight = videoNativeHeight;
+        state.videoDisplayWidth = displayWidth;
+        state.videoDisplayHeight = displayHeight;
         state.dpr = dpr;
 
-        // Canvas internal pixels (account for device pixel ratio)
-        canvas.width = Math.round(vw * dpr);
-        canvas.height = Math.round(vh * dpr);
-
-        // Canvas CSS size (matches video visually)
-        canvas.style.width = vw + 'px';
-        canvas.style.height = vh + 'px';
+        // Canvas matches the displayed video size
+        canvas.width = Math.round(displayWidth * dpr);
+        canvas.height = Math.round(displayHeight * dpr);
+        canvas.style.width = displayWidth + 'px';
+        canvas.style.height = displayHeight + 'px';
 
         // Set transform for DPR scaling
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1526,7 +1561,9 @@
         state.cameraActive = true;
         state.useFallback = false;
 
-        console.log(`Canvas setup: ${vw}×${vh} (CSS), ${canvas.width}×${canvas.height} (internal), DPR=${dpr}`);
+        console.log(`Video native: ${videoNativeWidth}×${videoNativeHeight}`);
+        console.log(`Video display: ${displayWidth.toFixed(0)}×${displayHeight.toFixed(0)}`);
+        console.log(`Canvas: ${displayWidth}×${displayHeight} (CSS), ${canvas.width}×${canvas.height} (internal), DPR=${dpr}`);
 
         return true;
       } catch (err) {
@@ -1541,8 +1578,8 @@
         canvas.style.height = window.innerHeight + 'px';
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        state.videoWidth = window.innerWidth;
-        state.videoHeight = window.innerHeight;
+        state.videoDisplayWidth = window.innerWidth;
+        state.videoDisplayHeight = window.innerHeight;
         state.dpr = dpr;
 
         alert('Camera access denied. Using mouse fallback mode.');
@@ -1611,9 +1648,36 @@
         canvas.style.height = h + 'px';
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        state.videoWidth = w;
-        state.videoHeight = h;
+        state.videoDisplayWidth = w;
+        state.videoDisplayHeight = h;
         state.dpr = dpr;
+      } else if (state.videoNativeWidth && state.videoNativeHeight) {
+        // Recalculate display size if camera is active
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const videoAspect = state.videoNativeWidth / state.videoNativeHeight;
+        const viewportAspect = viewportWidth / viewportHeight;
+
+        let displayWidth, displayHeight;
+        if (videoAspect > viewportAspect) {
+          displayHeight = viewportHeight;
+          displayWidth = displayHeight * videoAspect;
+        } else {
+          displayWidth = viewportWidth;
+          displayHeight = displayWidth / videoAspect;
+        }
+
+        const dpr = window.devicePixelRatio || 1;
+
+        state.videoDisplayWidth = displayWidth;
+        state.videoDisplayHeight = displayHeight;
+        state.dpr = dpr;
+
+        canvas.width = Math.round(displayWidth * dpr);
+        canvas.height = Math.round(displayHeight * dpr);
+        canvas.style.width = displayWidth + 'px';
+        canvas.style.height = displayHeight + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
     });
 
