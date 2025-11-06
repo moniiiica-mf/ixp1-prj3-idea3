@@ -372,77 +372,118 @@
       return Math.sqrt(dx * dx + dy * dy);
     }
 
-    function isFingerExtended(landmarks, tipIdx, pipIdx, mcpIdx, dipIdx = null) {
-      const tip = landmarks[tipIdx];
-      const pip = landmarks[pipIdx];
-      const mcp = landmarks[mcpIdx];
-      const dip = dipIdx ? landmarks[dipIdx] : null;
+    // Calculate hand size for normalization
+    function getHandSize(landmarks) {
+      const wrist = landmarks[LANDMARKS.WRIST];
+      const middleMcp = landmarks[LANDMARKS.MIDDLE_MCP];
+      const middleTip = landmarks[LANDMARKS.MIDDLE_TIP];
 
-      // Use 3D distance ratios - this works regardless of hand orientation
-      const tipPipDist = distance(tip, pip);
-      const pipMcpDist = distance(pip, mcp);
-      const mcpTipDist = distance(mcp, tip);
+      // Palm size: wrist to middle MCP
+      const palmSize = distance(wrist, middleMcp);
 
-      // For extended finger: tip-mcp distance should be larger than individual segments
-      // For curled finger: tip-mcp distance is small
-      const extendedRatio = mcpTipDist / (tipPipDist + pipMcpDist);
+      // Hand length: wrist to middle tip
+      const handLength = distance(wrist, middleTip);
 
-      // Additional check: if we have DIP, check straightness
-      if (dip) {
-        const dipTipDist = distance(dip, tip);
-        const mcpDipDist = distance(mcp, dip);
-
-        // For extended fingers, the chain should be relatively straight
-        // Sum of segments should be close to direct distance
-        const segmentSum = tipPipDist + distance(dip, pip) + distance(pip, mcp);
-        const straightness = mcpTipDist / segmentSum;
-
-        // Extended: straightness close to 1, extendedRatio > 0.8
-        return straightness > 0.75 && extendedRatio > 0.75;
-      }
-
-      // For thumb (no DIP), use simpler check
-      return extendedRatio > 0.8;
+      return { palmSize, handLength };
     }
 
-    // Calculate hand openness based on finger spread
-    function calculateHandSpread(landmarks) {
-      // Distance between fingertips
+    // Calculate angle between three points (in degrees)
+    function calculateAngle(p1, p2, p3) {
+      // p2 is the vertex
+      const v1 = { x: p1.x - p2.x, y: p1.y - p2.y, z: p1.z - p2.z };
+      const v2 = { x: p3.x - p2.x, y: p3.y - p2.y, z: p3.z - p2.z };
+
+      const dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+      const mag1 = Math.sqrt(v1.x * v1.x + v1.y * v1.y + v1.z * v1.z);
+      const mag2 = Math.sqrt(v2.x * v2.x + v2.y * v2.y + v2.z * v2.z);
+
+      const cosAngle = dot / (mag1 * mag2);
+      const angle = Math.acos(Math.max(-1, Math.min(1, cosAngle)));
+
+      return angle * 180 / Math.PI;
+    }
+
+    // Check if finger is extended using angle-based method
+    function isFingerExtended(landmarks, tipIdx, dipIdx, pipIdx, mcpIdx) {
+      // For fingers with DIP joint
+      if (dipIdx) {
+        const tip = landmarks[tipIdx];
+        const dip = landmarks[dipIdx];
+        const pip = landmarks[pipIdx];
+        const mcp = landmarks[mcpIdx];
+
+        // Calculate angles at PIP and DIP joints
+        const pipAngle = calculateAngle(mcp, pip, dip);
+        const dipAngle = calculateAngle(pip, dip, tip);
+
+        // Extended finger: both angles should be > 140 degrees (nearly straight)
+        // Curled finger: angles < 120 degrees
+        return pipAngle > 140 && dipAngle > 140;
+      } else {
+        // For thumb (no DIP)
+        const tip = landmarks[tipIdx];
+        const pip = landmarks[pipIdx];
+        const mcp = landmarks[mcpIdx];
+
+        const angle = calculateAngle(mcp, pip, tip);
+        return angle > 130;
+      }
+    }
+
+    // Get finger curl amount (0 = fully extended, 1 = fully curled)
+    function getFingerCurl(landmarks, tipIdx, dipIdx, pipIdx, mcpIdx) {
+      if (dipIdx) {
+        const tip = landmarks[tipIdx];
+        const dip = landmarks[dipIdx];
+        const pip = landmarks[pipIdx];
+        const mcp = landmarks[mcpIdx];
+
+        const pipAngle = calculateAngle(mcp, pip, dip);
+        const dipAngle = calculateAngle(pip, dip, tip);
+
+        // Average angle: 180 = straight, 0 = fully curled
+        const avgAngle = (pipAngle + dipAngle) / 2;
+
+        // Convert to curl: 0 = extended (180°), 1 = curled (0°)
+        return 1 - (avgAngle / 180);
+      } else {
+        const tip = landmarks[tipIdx];
+        const pip = landmarks[pipIdx];
+        const mcp = landmarks[mcpIdx];
+
+        const angle = calculateAngle(mcp, pip, tip);
+        return 1 - (angle / 180);
+      }
+    }
+
+    // Calculate hand openness (normalized 0-1)
+    function calculateHandSpread(landmarks, handSize) {
       const thumbTip = landmarks[LANDMARKS.THUMB_TIP];
       const indexTip = landmarks[LANDMARKS.INDEX_TIP];
       const middleTip = landmarks[LANDMARKS.MIDDLE_TIP];
       const ringTip = landmarks[LANDMARKS.RING_TIP];
       const pinkyTip = landmarks[LANDMARKS.PINKY_TIP];
 
+      // Total spread across fingertips
       const spread =
         distance(thumbTip, indexTip) +
         distance(indexTip, middleTip) +
         distance(middleTip, ringTip) +
         distance(ringTip, pinkyTip);
 
-      return spread;
+      // Normalize by hand length (typical max spread is ~2x hand length)
+      return Math.min(1, spread / (handSize.handLength * 2));
     }
 
-    // Calculate hand curl (how curled the fingers are)
+    // Calculate average finger curl
     function calculateHandCurl(landmarks) {
-      // For each finger, check if tip is close to palm
-      const wrist = landmarks[LANDMARKS.WRIST];
-      const indexMcp = landmarks[LANDMARKS.INDEX_MCP];
+      const indexCurl = getFingerCurl(landmarks, LANDMARKS.INDEX_TIP, LANDMARKS.INDEX_DIP, LANDMARKS.INDEX_PIP, LANDMARKS.INDEX_MCP);
+      const middleCurl = getFingerCurl(landmarks, LANDMARKS.MIDDLE_TIP, LANDMARKS.MIDDLE_DIP, LANDMARKS.MIDDLE_PIP, LANDMARKS.MIDDLE_MCP);
+      const ringCurl = getFingerCurl(landmarks, LANDMARKS.RING_TIP, LANDMARKS.RING_DIP, LANDMARKS.RING_PIP, LANDMARKS.RING_MCP);
+      const pinkyCurl = getFingerCurl(landmarks, LANDMARKS.PINKY_TIP, LANDMARKS.PINKY_DIP, LANDMARKS.PINKY_PIP, LANDMARKS.PINKY_MCP);
 
-      const palmCenter = {
-        x: (wrist.x + indexMcp.x) / 2,
-        y: (wrist.y + indexMcp.y) / 2,
-        z: (wrist.z + indexMcp.z) / 2
-      };
-
-      // Distance from fingertips to palm center
-      const indexDist = distance(landmarks[LANDMARKS.INDEX_TIP], palmCenter);
-      const middleDist = distance(landmarks[LANDMARKS.MIDDLE_TIP], palmCenter);
-      const ringDist = distance(landmarks[LANDMARKS.RING_TIP], palmCenter);
-      const pinkyDist = distance(landmarks[LANDMARKS.PINKY_TIP], palmCenter);
-
-      // Average distance - lower means more curled
-      return (indexDist + middleDist + ringDist + pinkyDist) / 4;
+      // Average curl (0 = all extended, 1 = all curled)
+      return (indexCurl + middleCurl + ringCurl + pinkyCurl) / 4;
     }
 
     function palmFacingUp(landmarks) {
@@ -493,19 +534,28 @@
     function recognizeGesture(hand, width, height) {
       const { landmarks } = hand;
 
-      // Finger extension states with DIP joints for accuracy
-      const thumbExt = isFingerExtended(landmarks, LANDMARKS.THUMB_TIP, LANDMARKS.THUMB_IP, LANDMARKS.THUMB_MCP);
-      const indexExt = isFingerExtended(landmarks, LANDMARKS.INDEX_TIP, LANDMARKS.INDEX_PIP, LANDMARKS.INDEX_MCP, LANDMARKS.INDEX_DIP);
-      const middleExt = isFingerExtended(landmarks, LANDMARKS.MIDDLE_TIP, LANDMARKS.MIDDLE_PIP, LANDMARKS.MIDDLE_MCP, LANDMARKS.MIDDLE_DIP);
-      const ringExt = isFingerExtended(landmarks, LANDMARKS.RING_TIP, LANDMARKS.RING_PIP, LANDMARKS.RING_MCP, LANDMARKS.RING_DIP);
-      const pinkyExt = isFingerExtended(landmarks, LANDMARKS.PINKY_TIP, LANDMARKS.PINKY_PIP, LANDMARKS.PINKY_MCP, LANDMARKS.PINKY_DIP);
+      // Get hand size for normalization
+      const handSize = getHandSize(landmarks);
+
+      // Finger extension states (angle-based)
+      const thumbExt = isFingerExtended(landmarks, LANDMARKS.THUMB_TIP, null, LANDMARKS.THUMB_IP, LANDMARKS.THUMB_MCP);
+      const indexExt = isFingerExtended(landmarks, LANDMARKS.INDEX_TIP, LANDMARKS.INDEX_DIP, LANDMARKS.INDEX_PIP, LANDMARKS.INDEX_MCP);
+      const middleExt = isFingerExtended(landmarks, LANDMARKS.MIDDLE_TIP, LANDMARKS.MIDDLE_DIP, LANDMARKS.MIDDLE_PIP, LANDMARKS.MIDDLE_MCP);
+      const ringExt = isFingerExtended(landmarks, LANDMARKS.RING_TIP, LANDMARKS.RING_DIP, LANDMARKS.RING_PIP, LANDMARKS.RING_MCP);
+      const pinkyExt = isFingerExtended(landmarks, LANDMARKS.PINKY_TIP, LANDMARKS.PINKY_DIP, LANDMARKS.PINKY_PIP, LANDMARKS.PINKY_MCP);
+
+      // Finger curl values (0 = extended, 1 = curled)
+      const indexCurl = getFingerCurl(landmarks, LANDMARKS.INDEX_TIP, LANDMARKS.INDEX_DIP, LANDMARKS.INDEX_PIP, LANDMARKS.INDEX_MCP);
+      const middleCurl = getFingerCurl(landmarks, LANDMARKS.MIDDLE_TIP, LANDMARKS.MIDDLE_DIP, LANDMARKS.MIDDLE_PIP, LANDMARKS.MIDDLE_MCP);
+      const ringCurl = getFingerCurl(landmarks, LANDMARKS.RING_TIP, LANDMARKS.RING_DIP, LANDMARKS.RING_PIP, LANDMARKS.RING_MCP);
+      const pinkyCurl = getFingerCurl(landmarks, LANDMARKS.PINKY_TIP, LANDMARKS.PINKY_DIP, LANDMARKS.PINKY_PIP, LANDMARKS.PINKY_MCP);
 
       const allExtended = thumbExt && indexExt && middleExt && ringExt && pinkyExt;
       const fourExtended = indexExt && middleExt && ringExt && pinkyExt;
-      const allCurled = !indexExt && !middleExt && !ringExt && !pinkyExt && !thumbExt;
+      const allCurled = !indexExt && !middleExt && !ringExt && !pinkyExt;
 
-      // Calculate hand metrics
-      const handSpread = calculateHandSpread(landmarks);
+      // Calculate hand metrics (normalized 0-1)
+      const handSpread = calculateHandSpread(landmarks, handSize);
       const handCurl = calculateHandCurl(landmarks);
 
       // Pinch distance
@@ -529,60 +579,62 @@
         gesture = 'Pinch';
         confidence = Math.max(0.75, 1 - pinchDist / CONFIG.pinchPx);
       }
-      // 2. Point gesture (only index extended)
+      // 2. Fist (all curled with high curl values)
+      else if (allCurled && handCurl > 0.65) {
+        gesture = 'Fist';
+        confidence = 0.90;
+      }
+      // 3. Open Palm (all extended with low curl and high spread)
+      else if ((allExtended || fourExtended) && handCurl < 0.35 && handSpread > 0.35) {
+        gesture = palmUp ? 'OpenPalm' : 'OpenPalm';
+        confidence = 0.92;
+      }
+      // 4. Point gesture (only index extended)
       else if (indexExt && !middleExt && !ringExt && !pinkyExt) {
         gesture = 'Point';
-        confidence = 0.85;
-      }
-      // 3. Fist (all curled AND low spread AND low curl distance)
-      else if (allCurled && handSpread < 0.4 && handCurl < 0.25) {
-        gesture = 'Fist';
         confidence = 0.88;
       }
-      // 4. Open palm (all or most extended AND high spread)
-      else if ((allExtended || fourExtended) && handSpread > 0.5) {
-        if (palmUp) {
-          gesture = 'PalmUp';
-          confidence = 0.90;
-        } else {
-          gesture = 'OpenPalm';
-          confidence = 0.88;
-        }
-      }
-      // 5. Palm variations
-      else if (fourExtended && handSpread > 0.45) {
-        gesture = palmUp ? 'PalmUp' : 'OpenPalm';
-        confidence = 0.82;
-      }
-      // 6. Peace/Victory sign
+      // 5. Peace/Victory sign (index and middle extended)
       else if (indexExt && middleExt && !ringExt && !pinkyExt) {
         gesture = 'Peace';
+        confidence = 0.86;
+      }
+      // 6. Thumbs up
+      else if (thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt && handCurl > 0.5) {
+        gesture = 'ThumbsUp';
+        confidence = 0.88;
+      }
+      // 7. Rock/Horn gesture (index and pinky extended)
+      else if (indexExt && !middleExt && !ringExt && pinkyExt) {
+        gesture = 'Rock';
+        confidence = 0.84;
+      }
+      // 8. OK sign (thumb and index close, others extended)
+      else if (pinchDist < CONFIG.pinchPx * 1.5 && middleExt && ringExt && pinkyExt) {
+        gesture = 'OK';
         confidence = 0.83;
       }
-      // 7. Thumbs up
-      else if (thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt) {
-        gesture = 'ThumbsUp';
-        confidence = 0.85;
-      }
-      // 8. Partial open (some fingers extended)
-      else if ((indexExt || middleExt || ringExt || pinkyExt) && handSpread > 0.35) {
+      // 9. Partially open hand
+      else if (handCurl < 0.50 && handSpread > 0.25) {
         gesture = 'PartialOpen';
-        confidence = 0.70;
+        confidence = 0.72;
       }
 
-      // Store hand metrics for debugging
+      // Store detailed metrics for debugging
       hand.handSpread = handSpread;
       hand.handCurl = handCurl;
+      hand.fingerCurls = { index: indexCurl, middle: middleCurl, ring: ringCurl, pinky: pinkyCurl };
+      hand.fingerExtensions = { thumb: thumbExt, index: indexExt, middle: middleExt, ring: ringExt, pinky: pinkyExt };
 
       // Smooth gesture with history
       if (!hand.gestureHistory) hand.gestureHistory = [];
       hand.gestureHistory.push({ gesture, confidence, time: Date.now() });
 
       // Keep only recent history
-      const cutoff = Date.now() - 400;
+      const cutoff = Date.now() - 350;
       hand.gestureHistory = hand.gestureHistory.filter(g => g.time > cutoff);
 
-      // Most common gesture in window (with minimum count threshold)
+      // Most common gesture in window
       const gestureCounts = new Map();
       hand.gestureHistory.forEach(g => {
         gestureCounts.set(g.gesture, (gestureCounts.get(g.gesture) || 0) + 1);
@@ -1052,12 +1104,38 @@
         html += `<div class="debug-label">${hand.handedness} Hand</div>`;
         html += `<div class="debug-row"><span class="debug-key">Gesture:</span><span class="debug-value gesture-badge">${hand.gesture} (${(hand.gestureConfidence * 100).toFixed(0)}%)</span></div>`;
         html += `<div class="debug-row"><span class="debug-key">Palm:</span><span class="debug-value">(${hand.palm.nx.toFixed(3)}, ${hand.palm.ny.toFixed(3)})</span></div>`;
+
+        // Hand metrics
+        html += `<div class="debug-row"><span class="debug-key">Spread (0-1):</span><span class="debug-value" style="color: ${hand.handSpread > 0.35 ? '#4aff4a' : '#ff4a4a'}">${hand.handSpread ? hand.handSpread.toFixed(3) : 'N/A'}</span></div>`;
+        html += `<div class="debug-row"><span class="debug-key">Curl (0-1):</span><span class="debug-value" style="color: ${hand.handCurl < 0.35 ? '#4aff4a' : hand.handCurl > 0.65 ? '#ff4a4a' : '#ffaa4a'}">${hand.handCurl ? hand.handCurl.toFixed(3) : 'N/A'}</span></div>`;
+
+        // Finger extensions
+        if (hand.fingerExtensions) {
+          const ext = hand.fingerExtensions;
+          html += `<div class="debug-row"><span class="debug-key">Fingers:</span><span class="debug-value">`;
+          html += `T:${ext.thumb ? '✓' : '✗'} `;
+          html += `I:${ext.index ? '✓' : '✗'} `;
+          html += `M:${ext.middle ? '✓' : '✗'} `;
+          html += `R:${ext.ring ? '✓' : '✗'} `;
+          html += `P:${ext.pinky ? '✓' : '✗'}`;
+          html += `</span></div>`;
+        }
+
+        // Individual finger curls
+        if (hand.fingerCurls) {
+          const c = hand.fingerCurls;
+          html += `<div class="debug-row"><span class="debug-key">Curls:</span><span class="debug-value" style="font-size: 10px;">`;
+          html += `I:${c.index.toFixed(2)} `;
+          html += `M:${c.middle.toFixed(2)} `;
+          html += `R:${c.ring.toFixed(2)} `;
+          html += `P:${c.pinky.toFixed(2)}`;
+          html += `</span></div>`;
+        }
+
         html += `<div class="debug-row"><span class="debug-key">Velocity:</span><span class="debug-value">(${hand.velocity.vx.toFixed(0)}, ${hand.velocity.vy.toFixed(0)}) px/s</span></div>`;
         html += `<div class="debug-row"><span class="debug-key">Speed:</span><span class="debug-value">${hand.velocity.speed.toFixed(0)} px/s</span></div>`;
         html += `<div class="debug-row"><span class="debug-key">Depth (z):</span><span class="debug-value">${hand.z.toFixed(4)}</span></div>`;
-        html += `<div class="debug-row"><span class="debug-key">Pinch Dist:</span><span class="debug-value">${hand.pinchDist.toFixed(1)} px</span></div>`;
-        html += `<div class="debug-row"><span class="debug-key">Hand Spread:</span><span class="debug-value">${hand.handSpread ? hand.handSpread.toFixed(3) : 'N/A'}</span></div>`;
-        html += `<div class="debug-row"><span class="debug-key">Hand Curl:</span><span class="debug-value">${hand.handCurl ? hand.handCurl.toFixed(3) : 'N/A'}</span></div>`;
+        html += `<div class="debug-row"><span class="debug-key">Pinch:</span><span class="debug-value">${hand.pinchDist.toFixed(1)} px</span></div>`;
         html += `</div>`;
       }
 
