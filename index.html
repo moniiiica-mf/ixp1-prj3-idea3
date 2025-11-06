@@ -62,9 +62,6 @@
       border: 1px solid rgba(255, 255, 255, 0.1);
     }
 
-    #debugPanel.hidden {
-      display: none;
-    }
 
     .debug-hand {
       margin-bottom: 12px;
@@ -107,55 +104,7 @@
       font-size: 11px;
     }
 
-    .controls {
-      position: fixed;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 100;
-      display: flex;
-      gap: 10px;
-    }
 
-    button {
-      padding: 12px 20px;
-      background: rgba(74, 158, 255, 0.3);
-      border: 1px solid rgba(74, 158, 255, 0.5);
-      color: #fff;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      backdrop-filter: blur(10px);
-      transition: all 0.2s;
-    }
-
-    button:hover {
-      background: rgba(74, 158, 255, 0.5);
-      border-color: rgba(74, 158, 255, 0.8);
-    }
-
-    button.active {
-      background: rgba(74, 158, 255, 0.7);
-      border-color: rgba(74, 158, 255, 1);
-    }
-
-    #threeContainer {
-      position: fixed;
-      top: 10px;
-      right: 10px;
-      width: 300px;
-      height: 300px;
-      background: rgba(0, 0, 0, 0.85);
-      border-radius: 8px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      z-index: 100;
-      backdrop-filter: blur(10px);
-    }
-
-    #threeContainer.hidden {
-      display: none;
-    }
 
     #demoOverlay {
       position: fixed;
@@ -208,19 +157,89 @@
     .swipe-flash {
       position: fixed;
       pointer-events: none;
-      background: rgba(74, 158, 255, 0.3);
-      animation: flash 0.3s ease-out;
+      animation: flash 0.5s ease-out forwards;
       z-index: 50;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 48px;
+      font-weight: bold;
+      color: #fff;
+      text-shadow: 0 0 20px rgba(74, 158, 255, 1);
     }
 
-    .swipe-flash.left { left: 0; top: 0; bottom: 0; width: 50px; }
-    .swipe-flash.right { right: 0; top: 0; bottom: 0; width: 50px; }
-    .swipe-flash.up { top: 0; left: 0; right: 0; height: 50px; }
-    .swipe-flash.down { bottom: 0; left: 0; right: 0; height: 50px; }
+    .swipe-flash.left {
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 150px;
+      background: linear-gradient(to right, rgba(74, 158, 255, 0.8), transparent);
+    }
+
+    .swipe-flash.right {
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 150px;
+      background: linear-gradient(to left, rgba(74, 158, 255, 0.8), transparent);
+    }
+
+    .swipe-flash.up {
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 150px;
+      background: linear-gradient(to bottom, rgba(74, 158, 255, 0.8), transparent);
+    }
+
+    .swipe-flash.down {
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 150px;
+      background: linear-gradient(to top, rgba(74, 158, 255, 0.8), transparent);
+    }
 
     @keyframes flash {
-      0% { opacity: 1; }
-      100% { opacity: 0; }
+      0% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.2); }
+    }
+
+    .tap-indicator {
+      position: fixed;
+      pointer-events: none;
+      width: 60px;
+      height: 60px;
+      border: 4px solid #4aff4a;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      animation: tap-pulse 0.4s ease-out forwards;
+      z-index: 60;
+    }
+
+    @keyframes tap-pulse {
+      0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
+      100% { transform: translate(-50%, -50%) scale(1.5); opacity: 0; }
+    }
+
+    .zoom-indicator-temp {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 80px;
+      font-weight: bold;
+      color: #ffaa4a;
+      text-shadow: 0 0 30px rgba(255, 170, 74, 1);
+      pointer-events: none;
+      animation: zoom-fade 0.6s ease-out forwards;
+      z-index: 60;
+    }
+
+    @keyframes zoom-fade {
+      0% { opacity: 1; transform: translate(-50%, -50%) scale(0.5); }
+      50% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
+      100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
     }
   </style>
 </head>
@@ -230,19 +249,12 @@
     <canvas id="canvas"></canvas>
   </div>
 
-  <div id="debugPanel" class="hidden">
-    <div class="debug-label">🎯 Hand Tracking Debug</div>
+  <div id="debugPanel">
+    <div class="debug-label">🎯 Hand Tracking Metrics</div>
     <div id="debugContent"></div>
   </div>
 
-  <div id="threeContainer" class="hidden"></div>
-
   <div class="zoom-indicator">Zoom: <span id="zoomValue">1.00×</span></div>
-
-  <div class="controls">
-    <button id="debugBtn">Debug Off</button>
-    <button id="threeBtn">3D View Off</button>
-  </div>
 
   <div id="demoOverlay"></div>
 
@@ -256,9 +268,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
-  <!-- Three.js (optional, for 3D view) -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
-
   <script>
     // ========================================
     // CONFIGURATION
@@ -269,17 +278,18 @@
       minConfidence: 0.7,
       smoothFrames: 8,
       lostTimeoutMs: 220,
-      swipeSpeedPxPerSec: 1400,
-      swipeAngleToleranceDeg: 35,
+      swipeSpeedPxPerSec: 800,  // Lowered from 1400 for easier detection
+      swipeAngleToleranceDeg: 45, // Increased tolerance
       pinchPx: 55,
       pinchHoldMs: 220,
-      tapDeltaZ: 0.12,
-      tapWindowMs: 180,
-      doubleTapMinMs: 120,
-      doubleTapMaxMs: 360,
+      tapDeltaZ: 0.08,  // Lowered for easier tap detection
+      tapWindowMs: 250,  // Increased window
+      doubleTapMinMs: 100,
+      doubleTapMaxMs: 500,
       overlapPx: 140,
       twoHandZoomHoldMs: 160,
       zoomFactorPerPx: 0.003,
+      zoomSpreadThreshold: 0.08,  // For single-hand zoom
       draw: { skeleton: true, landmarks: true, labels: true }
     };
 
@@ -309,8 +319,7 @@
     const state = {
       hands: new Map(), // handId -> hand state
       lastFrameTime: 0,
-      debugEnabled: false,
-      threeEnabled: false,
+      debugEnabled: true, // Always enabled
       cameraActive: false,
       useFallback: false,
       mousePos: { x: 0.5, y: 0.5 },
@@ -586,7 +595,7 @@
       }
       // 3. Open Palm (all extended with low curl and high spread)
       else if ((allExtended || fourExtended) && handCurl < 0.35 && handSpread > 0.35) {
-        gesture = palmUp ? 'OpenPalm' : 'OpenPalm';
+        gesture = 'OpenPalm';
         confidence = 0.92;
       }
       // 4. Point gesture (only index extended)
@@ -594,27 +603,7 @@
         gesture = 'Point';
         confidence = 0.88;
       }
-      // 5. Peace/Victory sign (index and middle extended)
-      else if (indexExt && middleExt && !ringExt && !pinkyExt) {
-        gesture = 'Peace';
-        confidence = 0.86;
-      }
-      // 6. Thumbs up
-      else if (thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt && handCurl > 0.5) {
-        gesture = 'ThumbsUp';
-        confidence = 0.88;
-      }
-      // 7. Rock/Horn gesture (index and pinky extended)
-      else if (indexExt && !middleExt && !ringExt && pinkyExt) {
-        gesture = 'Rock';
-        confidence = 0.84;
-      }
-      // 8. OK sign (thumb and index close, others extended)
-      else if (pinchDist < CONFIG.pinchPx * 1.5 && middleExt && ringExt && pinkyExt) {
-        gesture = 'OK';
-        confidence = 0.83;
-      }
-      // 9. Partially open hand
+      // 5. Partially open hand
       else if (handCurl < 0.50 && handSpread > 0.25) {
         gesture = 'PartialOpen';
         confidence = 0.72;
@@ -777,6 +766,41 @@
       return null;
     }
 
+    // Detect single-hand zoom based on hand spread changes
+    function detectSingleHandZoom(hand) {
+      if (!hand.handSpread) return null;
+
+      const handId = hand.id;
+      const currentSpread = hand.handSpread;
+
+      if (!hand.prevSpread) {
+        hand.prevSpread = currentSpread;
+        hand.zoomStartTime = Date.now();
+        return null;
+      }
+
+      const spreadDelta = currentSpread - hand.prevSpread;
+      const duration = Date.now() - (hand.zoomStartTime || 0);
+
+      // Detect significant spread change (zoom gesture)
+      if (Math.abs(spreadDelta) > CONFIG.zoomSpreadThreshold && duration > 100) {
+        hand.prevSpread = currentSpread;
+        hand.zoomStartTime = Date.now();
+
+        const factor = 1 + spreadDelta * 2; // Amplify the zoom effect
+
+        return {
+          mode: spreadDelta > 0 ? 'in' : 'out',
+          factor,
+          source: 'single-hand'
+        };
+      }
+
+      // Smooth update
+      hand.prevSpread = currentSpread * 0.1 + hand.prevSpread * 0.9;
+      return null;
+    }
+
     function detectTwoHandZoom(hands) {
       if (hands.length !== 2) return null;
 
@@ -924,6 +948,18 @@
             });
           }
 
+          // Detect single-hand zoom
+          const singleZoom = detectSingleHandZoom(hand);
+          if (singleZoom) {
+            HandInput.emit('zoom', {
+              mode: singleZoom.mode,
+              factor: singleZoom.factor,
+              source: singleZoom.source,
+              handedness: hand.handedness,
+              time: Date.now()
+            });
+          }
+
           // Emit handmove
           HandInput.emit('handmove', {
             nx: normalized.nx,
@@ -1013,90 +1049,91 @@
       for (const hand of state.hands.values()) {
         const { landmarks, handedness, palm, velocity, gesture, gestureConfidence } = hand;
 
+        // Helper to convert landmark to canvas coordinates
+        const landmarkToCanvas = (lm) => {
+          // Landmarks are already in normalized coords (0-1)
+          // Mirror x for natural interaction
+          const x = CONFIG.mirrorVideo ? (1 - lm.x) * ctx.canvas.width : lm.x * ctx.canvas.width;
+          const y = lm.y * ctx.canvas.height;
+          return { x, y };
+        };
+
         // Draw skeleton
         if (CONFIG.draw.skeleton) {
           ctx.strokeStyle = handedness === 'Left' ? '#4a9eff' : '#ff4a9e';
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 3;
 
           HAND_CONNECTIONS.forEach(([start, end]) => {
-            const p1 = landmarks[start];
-            const p2 = landmarks[end];
-            const n1 = normalizeCoords(p1.x, p1.y, ctx.canvas.width, ctx.canvas.height, CONFIG.mirrorVideo);
-            const n2 = normalizeCoords(p2.x, p2.y, ctx.canvas.width, ctx.canvas.height, CONFIG.mirrorVideo);
+            const p1 = landmarkToCanvas(landmarks[start]);
+            const p2 = landmarkToCanvas(landmarks[end]);
 
             ctx.beginPath();
-            ctx.moveTo(n1.x, n1.y);
-            ctx.lineTo(n2.x, n2.y);
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
             ctx.stroke();
           });
         }
 
-        // Draw landmarks
+        // Draw landmarks (joints)
         if (CONFIG.draw.landmarks) {
           landmarks.forEach((lm, idx) => {
-            const normalized = normalizeCoords(lm.x, lm.y, ctx.canvas.width, ctx.canvas.height, CONFIG.mirrorVideo);
+            const pos = landmarkToCanvas(lm);
 
-            ctx.fillStyle = handedness === 'Left' ? '#4a9eff' : '#ff4a9e';
+            // Different colors for different finger groups
+            let color = handedness === 'Left' ? '#4a9eff' : '#ff4a9e';
+            if (idx === LANDMARKS.WRIST) color = '#ffff00'; // Yellow for wrist
+            else if (idx >= 1 && idx <= 4) color = '#ff6b6b'; // Red for thumb
+            else if (idx >= 5 && idx <= 8) color = '#4aff4a'; // Green for index
+            else if (idx >= 9 && idx <= 12) color = '#4a9eff'; // Blue for middle
+            else if (idx >= 13 && idx <= 16) color = '#ff4aff'; // Magenta for ring
+            else if (idx >= 17 && idx <= 20) color = '#ffaa4a'; // Orange for pinky
+
+            ctx.fillStyle = color;
             ctx.beginPath();
-            ctx.arc(normalized.x, normalized.y, idx === LANDMARKS.WRIST ? 8 : 4, 0, 2 * Math.PI);
+            const radius = idx === LANDMARKS.WRIST ? 8 : 5;
+            ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
             ctx.fill();
+
+            // White border for better visibility
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1;
+            ctx.stroke();
 
             // Draw index numbers
             if (CONFIG.draw.labels) {
               ctx.fillStyle = '#fff';
-              ctx.font = '10px monospace';
-              ctx.fillText(idx, normalized.x + 8, normalized.y - 5);
+              ctx.font = 'bold 11px monospace';
+              ctx.strokeStyle = '#000';
+              ctx.lineWidth = 3;
+              ctx.strokeText(idx, pos.x + 10, pos.y - 8);
+              ctx.fillText(idx, pos.x + 10, pos.y - 8);
             }
           });
         }
 
-        // Draw velocity vector
-        if (velocity.speed > 100) {
-          const scale = 0.05;
-          ctx.strokeStyle = '#ffff00';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(palm.x, palm.y);
-          ctx.lineTo(palm.x + velocity.vx * scale, palm.y + velocity.vy * scale);
-          ctx.stroke();
-
-          // Arrowhead
-          const angle = Math.atan2(velocity.vy, velocity.vx);
-          const headLen = 10;
-          ctx.beginPath();
-          ctx.moveTo(palm.x + velocity.vx * scale, palm.y + velocity.vy * scale);
-          ctx.lineTo(
-            palm.x + velocity.vx * scale - headLen * Math.cos(angle - Math.PI / 6),
-            palm.y + velocity.vy * scale - headLen * Math.sin(angle - Math.PI / 6)
-          );
-          ctx.moveTo(palm.x + velocity.vx * scale, palm.y + velocity.vy * scale);
-          ctx.lineTo(
-            palm.x + velocity.vx * scale - headLen * Math.cos(angle + Math.PI / 6),
-            palm.y + velocity.vy * scale - headLen * Math.sin(angle + Math.PI / 6)
-          );
-          ctx.stroke();
-        }
-
         // Draw gesture badge
         if (CONFIG.draw.labels && gestureConfidence >= CONFIG.minConfidence) {
-          const badgeY = palm.y - 40;
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-          ctx.fillRect(palm.x - 50, badgeY - 20, 100, 25);
+          const wristPos = landmarkToCanvas(landmarks[LANDMARKS.WRIST]);
+          const badgeY = wristPos.y + 50;
+          const badgeX = wristPos.x;
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+          ctx.fillRect(badgeX - 60, badgeY - 25, 120, 35);
+
           ctx.fillStyle = '#fff';
-          ctx.font = 'bold 12px sans-serif';
+          ctx.font = 'bold 16px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText(gesture, palm.x, badgeY);
-          ctx.font = '10px sans-serif';
-          ctx.fillStyle = '#aaa';
-          ctx.fillText(`${(gestureConfidence * 100).toFixed(0)}%`, palm.x, badgeY + 12);
+          ctx.fillText(gesture, badgeX, badgeY - 5);
+
+          ctx.font = '12px sans-serif';
+          ctx.fillStyle = '#4aff4a';
+          ctx.fillText(`${(gestureConfidence * 100).toFixed(0)}%`, badgeX, badgeY + 10);
         }
       }
     }
 
     function updateDebugPanel() {
       const content = document.getElementById('debugContent');
-      if (!state.debugEnabled) return;
-
       let html = '';
 
       for (const hand of state.hands.values()) {
@@ -1146,91 +1183,6 @@
       content.innerHTML = html;
     }
 
-    // ========================================
-    // 3D VIEW (THREE.JS)
-    // ========================================
-    let threeScene, threeCamera, threeRenderer, handMeshes;
-
-    function init3DView() {
-      const container = document.getElementById('threeContainer');
-      const width = container.clientWidth;
-      const height = container.clientHeight;
-
-      threeScene = new THREE.Scene();
-      threeScene.background = new THREE.Color(0x000000);
-
-      threeCamera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
-      threeCamera.position.set(0, 0, 2);
-      threeCamera.lookAt(0, 0, 0);
-
-      threeRenderer = new THREE.WebGLRenderer({ antialias: true });
-      threeRenderer.setSize(width, height);
-      container.appendChild(threeRenderer.domElement);
-
-      // Lighting
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-      threeScene.add(ambientLight);
-
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      directionalLight.position.set(1, 1, 1);
-      threeScene.add(directionalLight);
-
-      handMeshes = new Map();
-    }
-
-    function update3DView() {
-      if (!state.threeEnabled || !threeScene) return;
-
-      // Clear old meshes
-      handMeshes.forEach(meshes => {
-        meshes.joints.forEach(mesh => threeScene.remove(mesh));
-        meshes.bones.forEach(mesh => threeScene.remove(mesh));
-      });
-      handMeshes.clear();
-
-      // Add new hand meshes
-      for (const hand of state.hands.values()) {
-        const joints = [];
-        const bones = [];
-
-        const color = hand.handedness === 'Left' ? 0x4a9eff : 0xff4a9e;
-
-        // Create joint spheres
-        hand.landmarks.forEach((lm, idx) => {
-          const geometry = new THREE.SphereGeometry(idx === LANDMARKS.WRIST ? 0.025 : 0.015, 16, 16);
-          const material = new THREE.MeshStandardMaterial({ color });
-          const mesh = new THREE.Mesh(geometry, material);
-
-          // MediaPipe coords: x right, y down, z toward camera
-          // Three.js: x right, y up, z toward viewer
-          mesh.position.set(lm.x - 0.5, -(lm.y - 0.5), -lm.z);
-
-          threeScene.add(mesh);
-          joints.push(mesh);
-        });
-
-        // Create bone lines
-        HAND_CONNECTIONS.forEach(([start, end]) => {
-          const p1 = hand.landmarks[start];
-          const p2 = hand.landmarks[end];
-
-          const geometry = new THREE.BufferGeometry().setFromPoints([
-            new THREE.Vector3(p1.x - 0.5, -(p1.y - 0.5), -p1.z),
-            new THREE.Vector3(p2.x - 0.5, -(p2.y - 0.5), -p2.z)
-          ]);
-
-          const material = new THREE.LineBasicMaterial({ color });
-          const line = new THREE.Line(geometry, material);
-
-          threeScene.add(line);
-          bones.push(line);
-        });
-
-        handMeshes.set(hand.id, { joints, bones });
-      }
-
-      threeRenderer.render(threeScene, threeCamera);
-    }
 
     // ========================================
     // DEMO / VISUAL EFFECTS
@@ -1265,12 +1217,41 @@
       overlay.innerHTML = html;
     }
 
-    // Event listeners for demo
+    // Event listeners for demo with enhanced visual feedback
     HandInput.on('swipe', (data) => {
       const flash = document.createElement('div');
       flash.className = `swipe-flash ${data.direction}`;
+
+      // Add arrow indicator
+      const arrows = {
+        'left': '← SWIPE LEFT',
+        'right': 'SWIPE RIGHT →',
+        'up': '↑ SWIPE UP',
+        'down': '↓ SWIPE DOWN'
+      };
+      flash.textContent = arrows[data.direction] || '';
+
       document.body.appendChild(flash);
-      setTimeout(() => flash.remove(), 300);
+      setTimeout(() => flash.remove(), 500);
+
+      console.log(`[SWIPE ${data.direction.toUpperCase()}] Speed: ${data.speed.toFixed(0)} px/s`);
+    });
+
+    HandInput.on('tap', (data) => {
+      const indicator = document.createElement('div');
+      indicator.className = 'tap-indicator';
+      indicator.style.left = `${data.nx * window.innerWidth}px`;
+      indicator.style.top = `${data.ny * window.innerHeight}px`;
+
+      if (data.count === 2) {
+        indicator.style.borderColor = '#ff4aff';
+        indicator.style.borderWidth = '6px';
+      }
+
+      document.body.appendChild(indicator);
+      setTimeout(() => indicator.remove(), 400);
+
+      console.log(`[TAP ${data.count === 2 ? 'DOUBLE' : 'SINGLE'}] at (${data.nx.toFixed(2)}, ${data.ny.toFixed(2)})`);
     });
 
     HandInput.on('pinch', (data) => {
@@ -1280,6 +1261,7 @@
           y: data.ny * canvas.height,
           time: Date.now()
         });
+        console.log(`[PINCH ${data.state.toUpperCase()}] Distance: ${data.distance.toFixed(1)}px`);
       }
     });
 
@@ -1287,6 +1269,15 @@
       state.zoomFactor *= data.factor;
       state.zoomFactor = Math.max(0.5, Math.min(3.0, state.zoomFactor));
       document.getElementById('zoomValue').textContent = `${state.zoomFactor.toFixed(2)}×`;
+
+      // Visual feedback
+      const zoomIndicator = document.createElement('div');
+      zoomIndicator.className = 'zoom-indicator-temp';
+      zoomIndicator.textContent = data.mode === 'in' ? '🔍+' : '🔍−';
+      document.body.appendChild(zoomIndicator);
+      setTimeout(() => zoomIndicator.remove(), 600);
+
+      console.log(`[ZOOM ${data.mode.toUpperCase()}] Factor: ${data.factor.toFixed(3)} Source: ${data.source}`);
     });
 
     // ========================================
@@ -1442,7 +1433,6 @@
         updateHands(results, dt);
         drawHands(ctx);
         updateDebugPanel();
-        update3DView();
         updateDemo();
       });
 
@@ -1470,33 +1460,8 @@
     }
 
     // ========================================
-    // UI CONTROLS
+    // RESIZE HANDLING
     // ========================================
-    document.getElementById('debugBtn').addEventListener('click', () => {
-      state.debugEnabled = !state.debugEnabled;
-      document.getElementById('debugPanel').classList.toggle('hidden', !state.debugEnabled);
-      document.getElementById('debugBtn').textContent = state.debugEnabled ? 'Debug On' : 'Debug Off';
-      document.getElementById('debugBtn').classList.toggle('active', state.debugEnabled);
-    });
-
-    document.getElementById('threeBtn').addEventListener('click', () => {
-      state.threeEnabled = !state.threeEnabled;
-      document.getElementById('threeContainer').classList.toggle('hidden', !state.threeEnabled);
-      document.getElementById('threeBtn').textContent = state.threeEnabled ? '3D View On' : '3D View Off';
-      document.getElementById('threeBtn').classList.toggle('active', state.threeEnabled);
-
-      if (state.threeEnabled && !threeScene) {
-        init3DView();
-      }
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key.toLowerCase() === 'd') {
-        document.getElementById('debugBtn').click();
-      }
-    });
-
-    // Resize handling
     window.addEventListener('resize', () => {
       if (!state.cameraActive) {
         canvas.width = window.innerWidth;
