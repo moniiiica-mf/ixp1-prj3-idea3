@@ -583,15 +583,16 @@
 
       // PRIORITY ORDER (most specific first)
 
-      // 1. Pinch (highest priority when close)
-      if (pinchDist < CONFIG.pinchPx) {
+      // 1. Fist (all curled with high curl values) - CHECK FIRST before Pinch
+      // Make sure it's not a pinch by checking pinch distance
+      if (allCurled && handCurl > 0.6 && pinchDist > CONFIG.pinchPx * 1.3) {
+        gesture = 'Fist';
+        confidence = 0.92;
+      }
+      // 2. Pinch (highest priority when close)
+      else if (pinchDist < CONFIG.pinchPx) {
         gesture = 'Pinch';
         confidence = Math.max(0.75, 1 - pinchDist / CONFIG.pinchPx);
-      }
-      // 2. Fist (all curled with high curl values)
-      else if (allCurled && handCurl > 0.65) {
-        gesture = 'Fist';
-        confidence = 0.90;
       }
       // 3. Open Palm (all extended with low curl and high spread)
       else if ((allExtended || fourExtended) && handCurl < 0.35 && handSpread > 0.35) {
@@ -603,7 +604,12 @@
         gesture = 'Point';
         confidence = 0.88;
       }
-      // 5. Partially open hand
+      // 5. Partially curled hand (not quite fist, not quite open)
+      else if (handCurl > 0.5 && handCurl <= 0.6) {
+        gesture = 'PartialOpen';
+        confidence = 0.70;
+      }
+      // 6. Partially open hand
       else if (handCurl < 0.50 && handSpread > 0.25) {
         gesture = 'PartialOpen';
         confidence = 0.72;
@@ -766,7 +772,8 @@
       return null;
     }
 
-    // Detect single-hand zoom based on index+middle finger spread (开花 gesture)
+    // Detect single-hand zoom based on index+middle finger spread transitions
+    // Closed→Open = Zoom IN, Open→Closed = Zoom OUT
     function detectSingleHandZoom(hand) {
       const landmarks = hand.landmarks;
 
@@ -782,39 +789,64 @@
       // Average spread
       const currentSpread = (indexSpread + middleSpread) / 2;
 
-      // Initialize baseline
-      if (!hand.baselineSpread) {
-        hand.baselineSpread = currentSpread;
-        hand.lastSpread = currentSpread;
-        hand.zoomStartTime = Date.now();
+      // Initialize baseline and state
+      if (!hand.zoomBaseline) {
+        hand.zoomBaseline = currentSpread;
+        hand.zoomState = 'unknown'; // 'closed', 'open', or 'unknown'
+        hand.lastZoomSpread = currentSpread;
+        hand.zoomCooldown = 0;
         return null;
       }
 
-      const spreadChange = currentSpread - hand.lastSpread;
-      const duration = Date.now() - (hand.zoomStartTime || 0);
+      // Smooth the spread value
+      const smoothedSpread = currentSpread * 0.3 + hand.lastZoomSpread * 0.7;
+      hand.lastZoomSpread = smoothedSpread;
 
-      // Detect significant simultaneous spread change (both fingers)
-      const threshold = hand.baselineSpread * 0.15; // 15% change threshold
+      // Determine if currently closed or open based on baseline
+      const threshold = hand.zoomBaseline * 0.25; // 25% threshold
+      const isClosed = smoothedSpread < hand.zoomBaseline + threshold;
+      const isOpen = smoothedSpread > hand.zoomBaseline + threshold * 2;
 
-      if (Math.abs(spreadChange) > threshold && duration > 150) {
-        hand.lastSpread = currentSpread;
-        hand.zoomStartTime = Date.now();
-
-        // Update baseline with slow adaptation
-        hand.baselineSpread = hand.baselineSpread * 0.95 + currentSpread * 0.05;
-
-        const factor = 1 + spreadChange * 8; // Amplify sensitivity
-
-        return {
-          mode: spreadChange > 0 ? 'out' : 'in', // Spread = zoom out, contract = zoom in
-          factor,
-          source: 'single-hand'
-        };
+      // Cooldown to prevent rapid re-triggering
+      const now = Date.now();
+      if (hand.zoomCooldown > now) {
+        return null;
       }
 
-      // Smooth update
-      hand.lastSpread = currentSpread * 0.2 + hand.lastSpread * 0.8;
-      return null;
+      let result = null;
+
+      // Detect state transitions
+      if (hand.zoomState === 'closed' && isOpen) {
+        // Transition from closed to open = ZOOM IN
+        result = {
+          mode: 'in',
+          factor: 1.15, // Discrete zoom step
+          source: 'single-hand'
+        };
+        hand.zoomState = 'open';
+        hand.zoomCooldown = now + 500; // 500ms cooldown
+      } else if (hand.zoomState === 'open' && isClosed) {
+        // Transition from open to closed = ZOOM OUT
+        result = {
+          mode: 'out',
+          factor: 0.85, // Discrete zoom step
+          source: 'single-hand'
+        };
+        hand.zoomState = 'closed';
+        hand.zoomCooldown = now + 500;
+      } else if (hand.zoomState === 'unknown') {
+        // Initialize state
+        if (isClosed) {
+          hand.zoomState = 'closed';
+        } else if (isOpen) {
+          hand.zoomState = 'open';
+        }
+      }
+
+      // Slowly adapt baseline
+      hand.zoomBaseline = hand.zoomBaseline * 0.98 + currentSpread * 0.02;
+
+      return result;
     }
 
     function detectTwoHandZoom(hands) {
@@ -1219,6 +1251,13 @@
         html += `<div class="debug-row"><span class="debug-key">Speed:</span><span class="debug-value">${hand.velocity.speed.toFixed(0)} px/s</span></div>`;
         html += `<div class="debug-row"><span class="debug-key">Depth (z):</span><span class="debug-value">${hand.z.toFixed(4)}</span></div>`;
         html += `<div class="debug-row"><span class="debug-key">Pinch:</span><span class="debug-value">${hand.pinchDist.toFixed(1)} px</span></div>`;
+
+        // Add zoom state info
+        if (hand.zoomState) {
+          const stateColor = hand.zoomState === 'closed' ? '#ff4a4a' : hand.zoomState === 'open' ? '#4aff4a' : '#888';
+          html += `<div class="debug-row"><span class="debug-key">Zoom State:</span><span class="debug-value" style="color: ${stateColor}">${hand.zoomState.toUpperCase()}</span></div>`;
+        }
+
         html += `</div>`;
       }
 
