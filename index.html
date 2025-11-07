@@ -241,6 +241,83 @@
       30% { opacity: 0.9; transform: translate(-50%, -50%) scale(1); }
       100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
     }
+
+    /* Orb tap ripple effects */
+    .orb-ripple {
+      position: fixed;
+      pointer-events: none;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 55;
+    }
+
+    .orb-ripple-single {
+      border: 3px solid rgba(74, 158, 255, 0.9);
+      animation: orb-ripple-single 0.6s ease-out forwards;
+    }
+
+    .orb-ripple-double {
+      border: 4px solid rgba(255, 74, 255, 0.9);
+      box-shadow: 0 0 20px rgba(255, 74, 255, 0.6);
+      animation: orb-ripple-double 0.8s ease-out forwards;
+    }
+
+    @keyframes orb-ripple-single {
+      0% {
+        width: 30px;
+        height: 30px;
+        opacity: 1;
+        border-width: 3px;
+      }
+      100% {
+        width: 120px;
+        height: 120px;
+        opacity: 0;
+        border-width: 1px;
+      }
+    }
+
+    @keyframes orb-ripple-double {
+      0% {
+        width: 30px;
+        height: 30px;
+        opacity: 1;
+        border-width: 4px;
+      }
+      50% {
+        width: 100px;
+        height: 100px;
+        opacity: 0.8;
+      }
+      100% {
+        width: 160px;
+        height: 160px;
+        opacity: 0;
+        border-width: 1px;
+      }
+    }
+
+    /* Orb pulse effects */
+    .orb-pulse {
+      animation: orb-pulse 0.3s ease-out forwards;
+    }
+
+    .orb-pulse-double {
+      animation: orb-pulse-double 0.5s ease-out forwards;
+    }
+
+    @keyframes orb-pulse {
+      0% { transform: translate(-50%, -50%) scale(1); }
+      50% { transform: translate(-50%, -50%) scale(1.4); }
+      100% { transform: translate(-50%, -50%) scale(1); }
+    }
+
+    @keyframes orb-pulse-double {
+      0% { transform: translate(-50%, -50%) scale(1); }
+      30% { transform: translate(-50%, -50%) scale(1.6); }
+      60% { transform: translate(-50%, -50%) scale(1.2); }
+      100% { transform: translate(-50%, -50%) scale(1); }
+    }
   </style>
 </head>
 <body>
@@ -1496,7 +1573,9 @@
     // ========================================
     const demoState = {
       orb: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      pinchRings: []
+      pinchRings: [],
+      orbRipples: [],
+      orbPulseClass: ''
     };
 
     function updateDemo() {
@@ -1510,7 +1589,15 @@
         demoState.orb.y += (hand.palm.y - demoState.orb.y) * 0.15;
       }
 
-      html += `<div style="position: fixed; left: ${demoState.orb.x}px; top: ${demoState.orb.y}px; width: 30px; height: 30px; border-radius: 50%; background: radial-gradient(circle, rgba(74,158,255,0.8), rgba(74,158,255,0)); transform: translate(-50%, -50%); pointer-events: none;"></div>`;
+      // Render orb with pulse effect (if active)
+      html += `<div class="${demoState.orbPulseClass}" style="position: fixed; left: ${demoState.orb.x}px; top: ${demoState.orb.y}px; width: 30px; height: 30px; border-radius: 50%; background: radial-gradient(circle, rgba(74,158,255,0.8), rgba(74,158,255,0)); transform: translate(-50%, -50%); pointer-events: none;"></div>`;
+
+      // Orb ripples (for tap effects)
+      demoState.orbRipples = demoState.orbRipples.filter(ripple => Date.now() - ripple.time < 1000);
+      demoState.orbRipples.forEach(ripple => {
+        const className = ripple.isDouble ? 'orb-ripple orb-ripple-double' : 'orb-ripple orb-ripple-single';
+        html += `<div class="${className}" style="position: fixed; left: ${demoState.orb.x}px; top: ${demoState.orb.y}px;"></div>`;
+      });
 
       // Pinch rings
       demoState.pinchRings = demoState.pinchRings.filter(ring => Date.now() - ring.time < 1000);
@@ -1545,12 +1632,15 @@
     });
 
     HandInput.on('tap', (data) => {
+      const isDouble = data.count === 2;
+
+      // Existing tap indicator (green circle at tap location)
       const indicator = document.createElement('div');
       indicator.className = 'tap-indicator';
       indicator.style.left = `${data.nx * window.innerWidth}px`;
       indicator.style.top = `${data.ny * window.innerHeight}px`;
 
-      if (data.count === 2) {
+      if (isDouble) {
         indicator.style.borderColor = '#ff4aff';
         indicator.style.borderWidth = '6px';
       }
@@ -1558,7 +1648,21 @@
       document.body.appendChild(indicator);
       setTimeout(() => indicator.remove(), 400);
 
-      console.log(`[TAP ${data.count === 2 ? 'DOUBLE' : 'SINGLE'}] at (${data.nx.toFixed(2)}, ${data.ny.toFixed(2)})`);
+      // NEW: Add ripple effect on the orb
+      demoState.orbRipples.push({
+        time: Date.now(),
+        isDouble: isDouble
+      });
+
+      // NEW: Add pulse effect to the orb
+      demoState.orbPulseClass = isDouble ? 'orb-pulse-double' : 'orb-pulse';
+
+      // Clear pulse class after animation completes
+      setTimeout(() => {
+        demoState.orbPulseClass = '';
+      }, isDouble ? 500 : 300);
+
+      console.log(`[TAP ${isDouble ? 'DOUBLE' : 'SINGLE'}] at (${data.nx.toFixed(2)}, ${data.ny.toFixed(2)})`);
     });
 
     HandInput.on('pinch', (data) => {
