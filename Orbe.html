@@ -1,0 +1,22 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww34000\viewh18940\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 HandInput.on('tap', (data) => \{\
+  const isDouble = data.count === 2;\
+  const orb = document.getElementById('tapOrb');\
+\
+  // snap to tap position first (so pulse aligns perfectly)\
+  const px = data.nx * window.innerWidth;\
+  const py = data.ny * window.innerHeight;\
+  if (orb) \{\
+    orb.style.left = `$\{px\}px`;\
+    orb.style.top  = `$\{py\}px`;\
+    orb.dataset.x = px; orb.dataset.y = py;\
+  \}\
+  // ... keep your existing ripple/pulse code\
+\});\
+}

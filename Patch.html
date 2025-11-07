@@ -1,0 +1,47 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta http-equiv="Content-Style-Type" content="text/css">
+  <title></title>
+  <meta name="Generator" content="Cocoa HTML Writer">
+  <meta name="CocoaVersion" content="2575.7">
+  <style type="text/css">
+    p.p1 {margin: 0.0px 0.0px 0.0px 0.0px; font: 13.0px 'Helvetica Neue'}
+    p.p2 {margin: 0.0px 0.0px 0.0px 0.0px; font: 13.0px 'Helvetica Neue'; min-height: 15.0px}
+  </style>
+</head>
+<body>
+<p class="p1">function detectOverlap(hands) {</p>
+<p class="p1"><span class="Apple-converted-space">  </span>if (hands.length !== 2) return null;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const [h1, h2] = hands;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const dist = distance2D(</p>
+<p class="p1"><span class="Apple-converted-space">    </span>{ x: h1.palm.x, y: h1.palm.y },</p>
+<p class="p1"><span class="Apple-converted-space">    </span>{ x: h2.palm.x, y: h2.palm.y }</p>
+<p class="p1"><span class="Apple-converted-space">  </span>);</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const overlapping = dist &lt; CONFIG.overlapPx;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>if (overlapping &amp;&amp; !state.handsOverlapping) { state.handsOverlapping = true; return 'enter'; }</p>
+<p class="p1"><span class="Apple-converted-space">  </span>if (!overlapping &amp;&amp; state.handsOverlapping) { state.handsOverlapping = false; return 'leave'; }</p>
+<p class="p1"><span class="Apple-converted-space">  </span>return null;</p>
+<p class="p1">}</p>
+<p class="p2"><br></p>
+<p class="p1">function detectTwoHandZoom(hands) {</p>
+<p class="p1"><span class="Apple-converted-space">  </span>if (hands.length !== 2) return null;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const [h1, h2] = hands;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>// use display-pixel coords you already have</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const span = distance2D({ x: h1.landmarks[LANDMARKS.INDEX_TIP].x * state.videoDisplayWidth,</p>
+<p class="p1"><span class="Apple-converted-space">                            </span>y: h1.landmarks[LANDMARKS.INDEX_TIP].y * state.videoDisplayHeight },</p>
+<p class="p1"><span class="Apple-converted-space">                          </span>{ x: h2.landmarks[LANDMARKS.INDEX_TIP].x * state.videoDisplayWidth,</p>
+<p class="p1"><span class="Apple-converted-space">                            </span>y: h2.landmarks[LANDMARKS.INDEX_TIP].y * state.videoDisplayHeight });</p>
+<p class="p1"><span class="Apple-converted-space">  </span>if (!state.prevTwoHandSpan) { state.prevTwoHandSpan = span; state.twoHandZoomStartTime = Date.now(); return null; }</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const delta = span - state.prevTwoHandSpan;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>const duration = Date.now() - state.twoHandZoomStartTime;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>if (Math.abs(delta) &gt; 10 &amp;&amp; duration &gt; CONFIG.twoHandZoomHoldMs) {</p>
+<p class="p1"><span class="Apple-converted-space">    </span>state.prevTwoHandSpan = span;</p>
+<p class="p1"><span class="Apple-converted-space">    </span>return { mode: delta &gt; 0 ? 'in' : 'out', factor: 1 + delta * CONFIG.zoomFactorPerPx, source: 'two-hands' };</p>
+<p class="p1"><span class="Apple-converted-space">  </span>}</p>
+<p class="p1"><span class="Apple-converted-space">  </span>state.prevTwoHandSpan = span;</p>
+<p class="p1"><span class="Apple-converted-space">  </span>return null;</p>
+<p class="p1">}</p>
+</body>
+</html>
