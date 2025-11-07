@@ -335,6 +335,9 @@
 
   <div id="demoOverlay"></div>
 
+  <!-- Blue orb that follows hand -->
+  <div id="tapOrb" class="tap-dot" style="position: fixed; width: 30px; height: 30px; border-radius: 50%; background: radial-gradient(circle, rgba(74,158,255,0.8), rgba(74,158,255,0)); pointer-events: none; transform: translate(-50%, -50%); z-index: 50;"></div>
+
   <div id="loading" class="loading">
     <div class="loading-spinner"></div>
     <div>Initializing hand tracking...</div>
@@ -1573,33 +1576,31 @@
     // ========================================
     const demoState = {
       orb: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      pinchRings: [],
-      orbRipples: [],
-      orbPulseClass: ''
+      pinchRings: []
     };
 
     function updateDemo() {
       const overlay = document.getElementById('demoOverlay');
+      const orb = document.getElementById('tapOrb');
       let html = '';
 
-      // Orb following hand
+      // Orb following hand - update position via transform
       if (state.hands.size > 0) {
         const hand = Array.from(state.hands.values())[0];
         demoState.orb.x += (hand.palm.x - demoState.orb.x) * 0.15;
         demoState.orb.y += (hand.palm.y - demoState.orb.y) * 0.15;
+
+        // Update orb position
+        if (orb) {
+          orb.style.left = `${demoState.orb.x}px`;
+          orb.style.top = `${demoState.orb.y}px`;
+          // Store position for ripples
+          orb.dataset.x = demoState.orb.x;
+          orb.dataset.y = demoState.orb.y;
+        }
       }
 
-      // Render orb with pulse effect (if active)
-      html += `<div class="${demoState.orbPulseClass}" style="position: fixed; left: ${demoState.orb.x}px; top: ${demoState.orb.y}px; width: 30px; height: 30px; border-radius: 50%; background: radial-gradient(circle, rgba(74,158,255,0.8), rgba(74,158,255,0)); transform: translate(-50%, -50%); pointer-events: none;"></div>`;
-
-      // Orb ripples (for tap effects)
-      demoState.orbRipples = demoState.orbRipples.filter(ripple => Date.now() - ripple.time < 1000);
-      demoState.orbRipples.forEach(ripple => {
-        const className = ripple.isDouble ? 'orb-ripple orb-ripple-double' : 'orb-ripple orb-ripple-single';
-        html += `<div class="${className}" style="position: fixed; left: ${demoState.orb.x}px; top: ${demoState.orb.y}px;"></div>`;
-      });
-
-      // Pinch rings
+      // Pinch rings (kept for pinch gesture visual feedback)
       demoState.pinchRings = demoState.pinchRings.filter(ring => Date.now() - ring.time < 1000);
       demoState.pinchRings.forEach(ring => {
         const age = Date.now() - ring.time;
@@ -1633,6 +1634,7 @@
 
     HandInput.on('tap', (data) => {
       const isDouble = data.count === 2;
+      const orb = document.getElementById('tapOrb');
 
       // Existing tap indicator (green circle at tap location)
       const indicator = document.createElement('div');
@@ -1648,19 +1650,46 @@
       document.body.appendChild(indicator);
       setTimeout(() => indicator.remove(), 400);
 
-      // NEW: Add ripple effect on the orb
-      demoState.orbRipples.push({
-        time: Date.now(),
-        isDouble: isDouble
-      });
+      if (orb) {
+        // Get orb position
+        const x = orb.dataset.x || demoState.orb.x;
+        const y = orb.dataset.y || demoState.orb.y;
 
-      // NEW: Add pulse effect to the orb
-      demoState.orbPulseClass = isDouble ? 'orb-pulse-double' : 'orb-pulse';
+        // Create ripple effect
+        const ripple = document.createElement('div');
+        ripple.className = isDouble ? 'orb-ripple orb-ripple-double' : 'orb-ripple orb-ripple-single';
+        ripple.style.left = `${x}px`;
+        ripple.style.top = `${y}px`;
+        document.body.appendChild(ripple);
 
-      // Clear pulse class after animation completes
-      setTimeout(() => {
-        demoState.orbPulseClass = '';
-      }, isDouble ? 500 : 300);
+        // Auto-remove ripple after animation
+        ripple.addEventListener('animationend', () => ripple.remove());
+        setTimeout(() => ripple.remove(), 1000); // Fallback cleanup
+
+        // Add second ripple for double tap
+        if (isDouble) {
+          setTimeout(() => {
+            const ripple2 = document.createElement('div');
+            ripple2.className = 'orb-ripple orb-ripple-double';
+            ripple2.style.left = `${x}px`;
+            ripple2.style.top = `${y}px`;
+            ripple2.style.animationDelay = '70ms';
+            document.body.appendChild(ripple2);
+            ripple2.addEventListener('animationend', () => ripple2.remove());
+            setTimeout(() => ripple2.remove(), 1000);
+          }, 90);
+        }
+
+        // Add pulse effect to the orb
+        orb.classList.remove('orb-pulse', 'orb-pulse-double');
+        void orb.offsetWidth; // Force reflow to restart animation
+        orb.classList.add(isDouble ? 'orb-pulse-double' : 'orb-pulse');
+
+        // Clear pulse class after animation completes
+        setTimeout(() => {
+          orb.classList.remove('orb-pulse', 'orb-pulse-double');
+        }, isDouble ? 500 : 300);
+      }
 
       console.log(`[TAP ${isDouble ? 'DOUBLE' : 'SINGLE'}] at (${data.nx.toFixed(2)}, ${data.ny.toFixed(2)})`);
     });
