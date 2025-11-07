@@ -740,11 +740,12 @@
 
       // 1. FIST - Use robust classification with high priority
       const fistResult = classifyFist(landmarks, width, height);
+      // ALWAYS store fist debug info (even if not detected, for debugging)
+      hand.fistExtras = fistResult.extras;
+
       if (fistResult.isFist && fistResult.confidence >= 0.55) {
         gesture = 'Fist';
         confidence = Math.max(0.85, fistResult.confidence);
-        // Store fist-specific debug info
-        hand.fistExtras = fistResult.extras;
       }
       // 2. Pinch (highest priority when close) - but only if not a fist
       else if (pinchDist < CONFIG.pinchPx) {
@@ -786,6 +787,8 @@
       hand.handCurl = handCurl;
       hand.fingerCurls = { index: indexCurl, middle: middleCurl, ring: ringCurl, pinky: pinkyCurl };
       hand.fingerExtensions = { thumb: thumbExt, index: indexExt, middle: middleExt, ring: ringExt, pinky: pinkyExt };
+      hand.fistDetected = fistResult.isFist;
+      hand.fistConfidence = fistResult.confidence;
 
       // Smooth gesture with history
       if (!hand.gestureHistory) hand.gestureHistory = [];
@@ -1457,9 +1460,13 @@
           html += `<div class="debug-row"><span class="debug-key">Zoom State:</span><span class="debug-value" style="color: ${stateColor}">${hand.zoomState.toUpperCase()}</span></div>`;
         }
 
-        // Add Fist-specific debug info
+        // Add Fist-specific debug info (ALWAYS SHOW)
         if (hand.fistExtras) {
           const f = hand.fistExtras;
+          const fistStatusColor = hand.fistDetected ? '#4aff4a' : '#ff4a4a';
+          html += `<div class="debug-row"><span class="debug-key">Fist Status:</span><span class="debug-value" style="color: ${fistStatusColor}; font-weight: bold;">`;
+          html += `${hand.fistDetected ? 'DETECTED' : 'NOT DETECTED'} (${(hand.fistConfidence * 100).toFixed(0)}%)`;
+          html += `</span></div>`;
           html += `<div class="debug-row"><span class="debug-key">Fist Check:</span><span class="debug-value" style="font-size: 10px;">`;
           html += `Curled:${f.curledCount}/4 `;
           html += `Thumb:${f.thumbFolded ? '✓' : '✗'} `;
