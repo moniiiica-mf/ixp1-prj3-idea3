@@ -617,6 +617,17 @@
       };
     }
 
+    // roundRect helper for browser compatibility
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
     // ========================================
     // IMPROVED GESTURE HELPERS (ROBUST)
     // ========================================
@@ -942,6 +953,9 @@
 
       if (!hand.tapHistory) hand.tapHistory = [];
 
+      // Suppress taps after double tap to prevent unwanted third taps
+      if (hand.tapSuppressUntil && Date.now() < hand.tapSuppressUntil) return 0;
+
       // Track z movement
       if (hand.prevIndexZ !== undefined) {
         const deltaZ = hand.prevIndexZ - indexTip.z; // Positive = toward camera
@@ -963,6 +977,7 @@
               const gap = recent[recent.length - 1] - recent[recent.length - 2];
               if (gap >= CONFIG.doubleTapMinMs && gap <= CONFIG.doubleTapMaxMs) {
                 hand.tapHistory = [];
+                hand.tapSuppressUntil = Date.now() + 180; // Suppress for 180ms
                 return 2; // Double tap
               }
             }
@@ -999,13 +1014,11 @@
     function detectOverlap(hands) {
       if (hands.length !== 2) return null;
 
-      const [hand1, hand2] = hands;
-      const palm1 = hand1.landmarks[LANDMARKS.WRIST];
-      const palm2 = hand2.landmarks[LANDMARKS.WRIST];
-
+      const [h1, h2] = hands;
+      // Use palm.x and palm.y which are already in display pixels
       const dist = distance2D(
-        { x: palm1.x * canvas.width, y: palm1.y * canvas.height },
-        { x: palm2.x * canvas.width, y: palm2.y * canvas.height }
+        { x: h1.palm.x, y: h1.palm.y },
+        { x: h2.palm.x, y: h2.palm.y }
       );
 
       const overlapping = dist < CONFIG.overlapPx;
@@ -1101,13 +1114,13 @@
     function detectTwoHandZoom(hands) {
       if (hands.length !== 2) return null;
 
-      const [hand1, hand2] = hands;
-      const index1 = hand1.landmarks[LANDMARKS.INDEX_TIP];
-      const index2 = hand2.landmarks[LANDMARKS.INDEX_TIP];
-
+      const [h1, h2] = hands;
+      // Use display-pixel coords
       const span = distance2D(
-        { x: index1.x * canvas.width, y: index1.y * canvas.height },
-        { x: index2.x * canvas.width, y: index2.y * canvas.height }
+        { x: h1.landmarks[LANDMARKS.INDEX_TIP].x * state.videoDisplayWidth,
+          y: h1.landmarks[LANDMARKS.INDEX_TIP].y * state.videoDisplayHeight },
+        { x: h2.landmarks[LANDMARKS.INDEX_TIP].x * state.videoDisplayWidth,
+          y: h2.landmarks[LANDMARKS.INDEX_TIP].y * state.videoDisplayHeight }
       );
 
       if (!state.prevTwoHandSpan) {
@@ -1120,11 +1133,10 @@
       const duration = Date.now() - state.twoHandZoomStartTime;
 
       if (Math.abs(delta) > 10 && duration > CONFIG.twoHandZoomHoldMs) {
-        const factor = 1 + delta * CONFIG.zoomFactorPerPx;
         state.prevTwoHandSpan = span;
         return {
           mode: delta > 0 ? 'in' : 'out',
-          factor,
+          factor: 1 + delta * CONFIG.zoomFactorPerPx,
           source: 'two-hands'
         };
       }
@@ -1476,8 +1488,7 @@
           const badgeX = wristPos.x;
 
           ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
-          ctx.beginPath();
-          ctx.roundRect(badgeX - 55, badgeY - 22, 110, 34, 6);
+          roundRect(ctx, badgeX - 55, badgeY - 22, 110, 34, 6);
           ctx.fill();
 
           ctx.fillStyle = '#fff';
@@ -1636,6 +1647,16 @@
       const isDouble = data.count === 2;
       const orb = document.getElementById('tapOrb');
 
+      // Snap orb to tap position first (so pulse aligns perfectly)
+      const px = data.nx * window.innerWidth;
+      const py = data.ny * window.innerHeight;
+      if (orb) {
+        orb.style.left = `${px}px`;
+        orb.style.top = `${py}px`;
+        orb.dataset.x = px;
+        orb.dataset.y = py;
+      }
+
       // Existing tap indicator (green circle at tap location)
       const indicator = document.createElement('div');
       indicator.className = 'tap-indicator';
@@ -1651,15 +1672,11 @@
       setTimeout(() => indicator.remove(), 400);
 
       if (orb) {
-        // Get orb position
-        const x = orb.dataset.x || demoState.orb.x;
-        const y = orb.dataset.y || demoState.orb.y;
-
-        // Create ripple effect
+        // Create ripple effect at the snapped position
         const ripple = document.createElement('div');
         ripple.className = isDouble ? 'orb-ripple orb-ripple-double' : 'orb-ripple orb-ripple-single';
-        ripple.style.left = `${x}px`;
-        ripple.style.top = `${y}px`;
+        ripple.style.left = `${px}px`;
+        ripple.style.top = `${py}px`;
         document.body.appendChild(ripple);
 
         // Auto-remove ripple after animation
@@ -1671,8 +1688,8 @@
           setTimeout(() => {
             const ripple2 = document.createElement('div');
             ripple2.className = 'orb-ripple orb-ripple-double';
-            ripple2.style.left = `${x}px`;
-            ripple2.style.top = `${y}px`;
+            ripple2.style.left = `${px}px`;
+            ripple2.style.top = `${py}px`;
             ripple2.style.animationDelay = '70ms';
             document.body.appendChild(ripple2);
             ripple2.addEventListener('animationend', () => ripple2.remove());
