@@ -452,15 +452,15 @@
 
     // Robust tap/double-tap detection configuration
     const TAP = {
-      emaAlpha: 0.45,         // smoothing for z
-      vIn: 0.65,              // tap-in z-velocity threshold (units/frame, ~30fps)
-      vOut: 0.45,             // release z-velocity threshold
-      amp: 0.06,              // minimum z amplitude of the poke
-      windowMs: 220,          // max duration from poke-in to release
+      emaAlpha: 0.3,          // smoothing for z (lower = more responsive)
+      vIn: 0.4,               // tap-in z-velocity threshold (lowered for easier detection)
+      vOut: 0.3,              // release z-velocity threshold (lowered)
+      amp: 0.04,              // minimum z amplitude of the poke (lowered)
+      windowMs: 300,          // max duration from poke-in to release (increased)
       minGapMs: 120,          // min gap between taps for double
-      maxGapMs: 360,          // max gap for double
+      maxGapMs: 450,          // max gap for double (increased)
       refractoryMs: 180,      // ignore extra bounces after a double
-      maxLateralPx: 40        // lateral motion allowed during tap
+      maxLateralPx: 50        // lateral motion allowed during tap (increased)
     };
 
     // MediaPipe Hand landmark indices (0-20)
@@ -1074,10 +1074,22 @@
     }
 
     // Robust tap/double-tap detector using state machine
+    // REQUIRES Point gesture - only index finger extended
     function detectTap(hand, width, height) {
       ensureTapState(hand);
       const now = Date.now();
       if (now < hand.suppressUntil) return 0;
+
+      // CRITICAL: Only detect taps when in Point gesture
+      const isPoint = hand.gesture === 'Point';
+
+      // If not pointing, reset state and return
+      if (!isPoint) {
+        if (hand.tapState === 'in') {
+          hand.tapState = 'idle'; // Cancel any in-progress tap
+        }
+        return 0;
+      }
 
       // Update smoothed relative z and z-velocity
       const zRel = relativeZ(hand);
@@ -1729,7 +1741,13 @@
 
         // Add Tap-specific debug info (ALWAYS SHOW)
         if (hand._tapInit) {
+          const isPoint = hand.gesture === 'Point';
+          const pointColor = isPoint ? '#4aff4a' : '#ff4a4a';
           const tapStateColor = hand.tapState === 'in' ? '#ffaa4a' : '#888';
+
+          html += `<div class="debug-row"><span class="debug-key">Point Gesture:</span><span class="debug-value" style="color: ${pointColor}; font-weight: bold;">`;
+          html += `${isPoint ? '✓ READY' : '✗ NOT READY'}`;
+          html += `</span></div>`;
           html += `<div class="debug-row"><span class="debug-key">Tap State:</span><span class="debug-value" style="color: ${tapStateColor}; font-weight: bold;">`;
           html += `${hand.tapState.toUpperCase()}`;
           html += `</span></div>`;
