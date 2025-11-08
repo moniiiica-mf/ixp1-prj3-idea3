@@ -373,6 +373,19 @@
       draw: { skeleton: true, landmarks: true, labels: true }
     };
 
+    // Robust tap/double-tap detection configuration
+    const TAP = {
+      emaAlpha: 0.45,         // smoothing for z
+      vIn: 0.65,              // tap-in z-velocity threshold (units/frame, ~30fps)
+      vOut: 0.45,             // release z-velocity threshold
+      amp: 0.06,              // minimum z amplitude of the poke
+      windowMs: 220,          // max duration from poke-in to release
+      minGapMs: 120,          // min gap between taps for double
+      maxGapMs: 360,          // max gap for double
+      refractoryMs: 180,      // ignore extra bounces after a double
+      maxLateralPx: 40        // lateral motion allowed during tap
+    };
+
     // MediaPipe Hand landmark indices (0-20)
     const LANDMARKS = {
       WRIST: 0,
@@ -948,46 +961,103 @@
       return null;
     }
 
-    function detectTap(hand) {
-      const indexTip = hand.landmarks[LANDMARKS.INDEX_TIP];
+    // Initialize tap state for a hand
+    function ensureTapState(hand) {
+      if (hand._tapInit) return;
+      hand._tapInit = true;
+      hand.tapState = 'idle';        // 'idle' | 'in'
+      hand.zRelEMA = 0;
+      hand.prevZRelEMA = 0;
+      hand.lastTapTime = 0;
+      hand.suppressUntil = 0;
+      hand.tapStart = 0;
+      hand.tapStartPos = { x: 0, y: 0 };
+      hand.zSign = 0;                // auto-detected sign of "toward camera"
+      hand.zMin = 0;
+      hand.tapAmp = 0;
+      hand.tapLateral = 0;
+      hand.tapVZ = 0;
+    }
 
-      if (!hand.tapHistory) hand.tapHistory = [];
+    // Compute relative z (index tip vs palm center) and auto-detect sign
+    function relativeZ(hand) {
+      const lm = hand.landmarks;
+      const tip = lm[LANDMARKS.INDEX_TIP];
+      const palm =
+        (lm[LANDMARKS.WRIST].z + lm[LANDMARKS.INDEX_MCP].z +
+         lm[LANDMARKS.MIDDLE_MCP].z + lm[LANDMARKS.RING_MCP].z +
+         lm[LANDMARKS.PINKY_MCP].z) / 5;
 
-      // Suppress taps after double tap to prevent unwanted third taps
-      if (hand.tapSuppressUntil && Date.now() < hand.tapSuppressUntil) return 0;
+      let zRel = tip.z - palm; // negative usually = closer to camera
+      if (hand.zSign === 0) {
+        // Quick sign learning: nudge sign toward what increases when moving hand forward
+        hand.zSign = (zRel < 0) ? -1 : 1;
+      }
+      return zRel * -hand.zSign; // now: positive means "toward camera"
+    }
 
-      // Track z movement
-      if (hand.prevIndexZ !== undefined) {
-        const deltaZ = hand.prevIndexZ - indexTip.z; // Positive = toward camera
+    // Robust tap/double-tap detector using state machine
+    function detectTap(hand, width, height) {
+      ensureTapState(hand);
+      const now = Date.now();
+      if (now < hand.suppressUntil) return 0;
 
-        if (deltaZ > CONFIG.tapDeltaZ && !hand.tapping) {
-          hand.tapping = true;
-          hand.tapStartTime = Date.now();
-        } else if (deltaZ < -CONFIG.tapDeltaZ / 2 && hand.tapping) {
-          const duration = Date.now() - hand.tapStartTime;
-          if (duration < CONFIG.tapWindowMs) {
-            hand.tapHistory.push(Date.now());
-            hand.tapping = false;
+      // Update smoothed relative z and z-velocity
+      const zRel = relativeZ(hand);
+      const zEMA = hand.zRelEMA = TAP.emaAlpha * zRel + (1 - TAP.emaAlpha) * (hand.zRelEMA || zRel);
+      const vZ = zEMA - (hand.prevZRelEMA ?? zEMA);
+      hand.prevZRelEMA = zEMA;
+      hand.tapVZ = vZ; // Store for debugging
 
-            // Check for double tap
-            const recent = hand.tapHistory.filter(t => Date.now() - t < CONFIG.doubleTapMaxMs);
-            hand.tapHistory = recent;
+      // Lateral motion since tap start
+      const tip = hand.landmarks[LANDMARKS.INDEX_TIP];
+      const tipPx = { x: tip.x * width, y: tip.y * height };
 
-            if (recent.length >= 2) {
-              const gap = recent[recent.length - 1] - recent[recent.length - 2];
-              if (gap >= CONFIG.doubleTapMinMs && gap <= CONFIG.doubleTapMaxMs) {
-                hand.tapHistory = [];
-                hand.tapSuppressUntil = Date.now() + 180; // Suppress for 180ms
-                return 2; // Double tap
-              }
-            }
-            return 1; // Single tap
+      if (hand.tapState === 'idle') {
+        // Look for a decisive poke-in: velocity spike + amplitude growing
+        if (vZ > TAP.vIn) {
+          hand.tapState = 'in';
+          hand.tapStart = now;
+          hand.zMin = zEMA; // Peak toward camera we'll track
+          hand.tapStartPos = { x: tipPx.x, y: tipPx.y };
+        }
+        return 0;
+      }
+
+      // State = 'in' (during poke)
+      hand.zMin = Math.max(hand.zMin, zEMA);
+      const amp = hand.zMin - zEMA; // How far we pushed toward camera since start
+      hand.tapAmp = amp; // Store for debugging
+
+      const lateral = Math.hypot(tipPx.x - hand.tapStartPos.x, tipPx.y - hand.tapStartPos.y);
+      hand.tapLateral = lateral; // Store for debugging
+
+      const exceededWindow = now - hand.tapStart > TAP.windowMs;
+
+      // Release detected = velocity back out OR timeout
+      if (vZ < -TAP.vOut || exceededWindow) {
+        // Validate as a tap: enough amplitude and little lateral drift
+        const okAmp = (hand.zMin >= TAP.amp);
+        const okLat = (lateral <= TAP.maxLateralPx);
+
+        hand.tapState = 'idle';
+
+        if (okAmp && okLat && !exceededWindow) {
+          // Single or double?
+          let count = 1;
+          if (hand.lastTapTime &&
+              (now - hand.lastTapTime >= TAP.minGapMs) &&
+              (now - hand.lastTapTime <= TAP.maxGapMs)) {
+            count = 2;
+            hand.suppressUntil = now + TAP.refractoryMs; // Ignore extra bounces
+            hand.lastTapTime = 0; // Reset
+          } else {
+            hand.lastTapTime = now;
           }
-          hand.tapping = false;
+          return count; // 1 or 2
         }
       }
 
-      hand.prevIndexZ = indexTip.z;
       return 0;
     }
 
@@ -1568,6 +1638,22 @@
           html += `M:${f.extMiddle.toFixed(2)} `;
           html += `R:${f.extRing.toFixed(2)} `;
           html += `P:${f.extPinky.toFixed(2)}`;
+          html += `</span></div>`;
+        }
+
+        // Add Tap-specific debug info (ALWAYS SHOW)
+        if (hand._tapInit) {
+          const tapStateColor = hand.tapState === 'in' ? '#ffaa4a' : '#888';
+          html += `<div class="debug-row"><span class="debug-key">Tap State:</span><span class="debug-value" style="color: ${tapStateColor}; font-weight: bold;">`;
+          html += `${hand.tapState.toUpperCase()}`;
+          html += `</span></div>`;
+          html += `<div class="debug-row"><span class="debug-key">Tap Metrics:</span><span class="debug-value" style="font-size: 10px;">`;
+          html += `zEMA:${hand.zRelEMA.toFixed(3)} `;
+          html += `vZ:${hand.tapVZ.toFixed(3)} `;
+          html += `amp:${hand.tapAmp.toFixed(3)}`;
+          html += `</span></div>`;
+          html += `<div class="debug-row"><span class="debug-key">Lateral:</span><span class="debug-value" style="font-size: 10px; color: ${hand.tapLateral > TAP.maxLateralPx ? '#ff4a4a' : '#4aff4a'}">`;
+          html += `${hand.tapLateral.toFixed(1)}px (max: ${TAP.maxLateralPx}px)`;
           html += `</span></div>`;
         }
 
