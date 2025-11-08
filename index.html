@@ -222,6 +222,83 @@
       100% { transform: translate(-50%, -50%) scale(1.5); opacity: 0; }
     }
 
+    /* Orb tap ripple effects */
+    .orb-ripple {
+      position: fixed;
+      pointer-events: none;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 55;
+    }
+
+    .orb-ripple-single {
+      border: 3px solid rgba(74, 158, 255, 0.9);
+      animation: orb-ripple-single 0.6s ease-out forwards;
+    }
+
+    .orb-ripple-double {
+      border: 4px solid rgba(255, 74, 255, 0.9);
+      box-shadow: 0 0 20px rgba(255, 74, 255, 0.6);
+      animation: orb-ripple-double 0.8s ease-out forwards;
+    }
+
+    @keyframes orb-ripple-single {
+      0% {
+        width: 30px;
+        height: 30px;
+        opacity: 1;
+        border-width: 3px;
+      }
+      100% {
+        width: 120px;
+        height: 120px;
+        opacity: 0;
+        border-width: 1px;
+      }
+    }
+
+    @keyframes orb-ripple-double {
+      0% {
+        width: 30px;
+        height: 30px;
+        opacity: 1;
+        border-width: 4px;
+      }
+      50% {
+        width: 100px;
+        height: 100px;
+        opacity: 0.8;
+      }
+      100% {
+        width: 160px;
+        height: 160px;
+        opacity: 0;
+        border-width: 1px;
+      }
+    }
+
+    /* Orb pulse effects */
+    .orb-pulse {
+      animation: orb-pulse 0.3s ease-out forwards;
+    }
+
+    .orb-pulse-double {
+      animation: orb-pulse-double 0.5s ease-out forwards;
+    }
+
+    @keyframes orb-pulse {
+      0% { transform: translate(-50%, -50%) scale(1); }
+      50% { transform: translate(-50%, -50%) scale(1.4); }
+      100% { transform: translate(-50%, -50%) scale(1); }
+    }
+
+    @keyframes orb-pulse-double {
+      0% { transform: translate(-50%, -50%) scale(1); }
+      30% { transform: translate(-50%, -50%) scale(1.6); }
+      60% { transform: translate(-50%, -50%) scale(1.2); }
+      100% { transform: translate(-50%, -50%) scale(1); }
+    }
+
     .zoom-indicator-temp {
       position: fixed;
       top: 50%;
@@ -334,6 +411,9 @@
   <div class="zoom-indicator" style="display: none;">Zoom: <span id="zoomValue">1.00×</span></div>
 
   <div id="demoOverlay"></div>
+
+  <!-- Blue orb that appears on tap -->
+  <div id="tapOrb" class="tap-dot" style="position: fixed; width: 30px; height: 30px; border-radius: 50%; background: radial-gradient(circle, rgba(74,158,255,0.8), rgba(74,158,255,0)); pointer-events: none; transform: translate(-50%, -50%); z-index: 50; opacity: 0; transition: opacity 0.2s ease;"></div>
 
   <div id="loading" class="loading">
     <div class="loading-spinner"></div>
@@ -1722,8 +1802,57 @@
 
     HandInput.on('tap', (data) => {
       const isDouble = data.count === 2;
+      const orb = document.getElementById('tapOrb');
 
-      // DISABLED: Orb removed
+      // Snap orb to tap position first (so pulse aligns perfectly)
+      const px = data.nx * window.innerWidth;
+      const py = data.ny * window.innerHeight;
+
+      if (orb) {
+        orb.style.left = `${px}px`;
+        orb.style.top = `${py}px`;
+        orb.dataset.x = px;
+        orb.dataset.y = py;
+
+        // Show the orb
+        orb.style.opacity = '1';
+
+        // Create ripple effect at the snapped position
+        const ripple = document.createElement('div');
+        ripple.className = isDouble ? 'orb-ripple orb-ripple-double' : 'orb-ripple orb-ripple-single';
+        ripple.style.left = `${px}px`;
+        ripple.style.top = `${py}px`;
+        document.body.appendChild(ripple);
+
+        // Auto-remove ripple after animation
+        ripple.addEventListener('animationend', () => ripple.remove());
+        setTimeout(() => ripple.remove(), 1000); // Fallback cleanup
+
+        // Add second ripple for double tap
+        if (isDouble) {
+          setTimeout(() => {
+            const ripple2 = document.createElement('div');
+            ripple2.className = 'orb-ripple orb-ripple-double';
+            ripple2.style.left = `${px}px`;
+            ripple2.style.top = `${py}px`;
+            ripple2.style.animationDelay = '70ms';
+            document.body.appendChild(ripple2);
+            ripple2.addEventListener('animationend', () => ripple2.remove());
+            setTimeout(() => ripple2.remove(), 1000);
+          }, 100);
+        }
+
+        // Pulse the orb
+        orb.classList.remove('orb-pulse', 'orb-pulse-double');
+        void orb.offsetWidth; // Force reflow to restart animation
+        orb.classList.add(isDouble ? 'orb-pulse-double' : 'orb-pulse');
+
+        // Clear pulse class and hide orb after animation completes
+        setTimeout(() => {
+          orb.classList.remove('orb-pulse', 'orb-pulse-double');
+          orb.style.opacity = '0';
+        }, isDouble ? 500 : 300);
+      }
 
       // Tap indicator (green circle at tap location)
       const indicator = document.createElement('div');
