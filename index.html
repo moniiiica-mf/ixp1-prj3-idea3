@@ -225,81 +225,24 @@
       100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
     }
 
-    /* Orb tap ripple effects */
-    .orb-ripple {
+    /* Tap orb effect */
+    .tap-orb {
       position: fixed;
-      pointer-events: none;
+      width: 40px;
+      height: 40px;
       border-radius: 50%;
-      transform: translate(-50%, -50%);
-      z-index: 55;
+      background: radial-gradient(circle at 30% 30%, #3b82f6 0%, #1e40af 80%);
+      box-shadow: 0 0 40px rgba(59,130,246,0.7);
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, -50%) scale(0.8);
+      transition: transform 0.25s ease, opacity 0.35s ease;
+      z-index: 60;
     }
 
-    .orb-ripple-single {
-      border: 3px solid rgba(74, 158, 255, 0.9);
-      animation: orb-ripple-single 0.6s ease-out forwards;
-    }
-
-    .orb-ripple-double {
-      border: 4px solid rgba(255, 74, 255, 0.9);
-      box-shadow: 0 0 20px rgba(255, 74, 255, 0.6);
-      animation: orb-ripple-double 0.8s ease-out forwards;
-    }
-
-    @keyframes orb-ripple-single {
-      0% {
-        width: 30px;
-        height: 30px;
-        opacity: 1;
-        border-width: 3px;
-      }
-      100% {
-        width: 120px;
-        height: 120px;
-        opacity: 0;
-        border-width: 1px;
-      }
-    }
-
-    @keyframes orb-ripple-double {
-      0% {
-        width: 30px;
-        height: 30px;
-        opacity: 1;
-        border-width: 4px;
-      }
-      50% {
-        width: 100px;
-        height: 100px;
-        opacity: 0.8;
-      }
-      100% {
-        width: 160px;
-        height: 160px;
-        opacity: 0;
-        border-width: 1px;
-      }
-    }
-
-    /* Orb pulse effects */
-    .orb-pulse {
-      animation: orb-pulse 0.3s ease-out forwards;
-    }
-
-    .orb-pulse-double {
-      animation: orb-pulse-double 0.5s ease-out forwards;
-    }
-
-    @keyframes orb-pulse {
-      0% { transform: translate(-50%, -50%) scale(1); }
-      50% { transform: translate(-50%, -50%) scale(1.4); }
-      100% { transform: translate(-50%, -50%) scale(1); }
-    }
-
-    @keyframes orb-pulse-double {
-      0% { transform: translate(-50%, -50%) scale(1); }
-      30% { transform: translate(-50%, -50%) scale(1.6); }
-      60% { transform: translate(-50%, -50%) scale(1.2); }
-      100% { transform: translate(-50%, -50%) scale(1); }
+    .tap-orb.active {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1.4);
     }
   </style>
 </head>
@@ -317,6 +260,8 @@
   <div class="zoom-indicator" style="display: none;">Zoom: <span id="zoomValue">1.00×</span></div>
 
   <div id="demoOverlay"></div>
+
+  <div id="tapOrb" class="tap-orb"></div>
 
   <div id="loading" class="loading">
     <div class="loading-spinner"></div>
@@ -1721,11 +1666,32 @@
       console.log(`[SWIPE ${data.direction.toUpperCase()}] Speed: ${data.speed.toFixed(0)} px/s`);
     });
 
+    // Tap orb animation setup
+    const tapOrb = document.getElementById('tapOrb');
+    let hideTimeout;
+
     HandInput.on('tap', (data) => {
       const isDouble = data.count === 2;
-      console.log(`[TAP ${isDouble ? 'DOUBLE' : 'SINGLE'}] at (${data.nx.toFixed(2)}, ${data.ny.toFixed(2)})`);
+      const { nx, ny, count } = data;
 
-      // TODO: Add tap visual effects here
+      // Map normalized coords (0–1) → screen px
+      const x = nx * window.innerWidth;
+      const y = ny * window.innerHeight;
+
+      // Move the orb to tap position
+      tapOrb.style.left = `${x}px`;
+      tapOrb.style.top = `${y}px`;
+
+      // Trigger animation
+      tapOrb.classList.remove('active');
+      void tapOrb.offsetWidth; // reset transition
+      tapOrb.classList.add('active');
+
+      // Hide orb again after 0.5s
+      clearTimeout(hideTimeout);
+      hideTimeout = setTimeout(() => tapOrb.classList.remove('active'), 500);
+
+      console.log(`[TAP ${isDouble ? 'DOUBLE' : 'SINGLE'}] at (${nx.toFixed(2)}, ${ny.toFixed(2)})`);
     });
 
     HandInput.on('pinch', (data) => {
@@ -2038,6 +2004,15 @@
         canvas.style.height = displayHeight + 'px';
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
+    });
+
+    // ========================================
+    // MOUSE FALLBACK FOR TESTING
+    // ========================================
+    window.addEventListener('click', (e) => {
+      const nx = e.clientX / window.innerWidth;
+      const ny = e.clientY / window.innerHeight;
+      HandInput.emit('tap', { nx, ny, count: 1 });
     });
 
     // ========================================
