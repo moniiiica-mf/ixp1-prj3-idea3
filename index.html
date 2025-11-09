@@ -300,11 +300,11 @@
 
     // Robust tap/double-tap detection configuration
     const TAP = {
-      movementThreshold: 0.08,   // minimum movement distance (normalized 0-1 coords)
+      movementThreshold: 0.02,   // minimum movement distance (normalized 0-1 coords) - LOWERED
       cooldownMs: 200,            // cooldown after detecting a tap
       minGapMs: 120,              // min gap between taps for double
       maxGapMs: 450,              // max gap for double
-      velocityWindow: 5           // frames to track for velocity calculation
+      velocityWindow: 8           // frames to track for velocity calculation - INCREASED
     };
 
     // MediaPipe Hand landmark indices (0-20)
@@ -959,6 +959,11 @@
       hand.tapMovement = totalMovement;
       hand.tapSpeed = speed;
 
+      // Debug logging (only when Point gesture and enough history)
+      if (isPoint && hand.positionHistory.length >= TAP.velocityWindow) {
+        console.log(`[TAP DEBUG] Movement: ${totalMovement.toFixed(4)}, Threshold: ${TAP.movementThreshold}, History: ${hand.positionHistory.length}`);
+      }
+
       // Detect tap: significant movement detected
       if (totalMovement > TAP.movementThreshold) {
         // Clear history to reset for next tap
@@ -978,6 +983,7 @@
           hand.lastTapTime = now;
         }
 
+        console.log(`[TAP DETECTED] Count: ${count}, Movement: ${totalMovement.toFixed(4)}`);
         return count; // 1 or 2
       }
 
