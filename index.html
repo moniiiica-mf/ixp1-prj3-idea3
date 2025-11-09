@@ -897,7 +897,7 @@
       hand.tapMovement = 0;          // current zRel movement from baseline (for debug)
       hand._tapArmed = false;        // hysteresis state for tap arming
       hand.baselineTime = 0;         // timestamp when baseline was set (for time guard)
-      hand.baselinePos = { x: 0, y: 0 }; // palm position when baseline was set (for lateral guard)
+      hand.baselinePos = { nx: 0, ny: 0 }; // palm position when baseline was set (for lateral guard)
     }
 
     // Compute relative z (index tip vs palm center) and auto-detect sign
@@ -951,7 +951,7 @@
         hand.zRelBaseline = zRel;
         hand.baselineSet = true;
         hand.baselineTime = now;
-        hand.baselinePos = { x: hand.palm.x, y: hand.palm.y };
+        hand.baselinePos = { nx: hand.palm.nx, ny: hand.palm.ny };
         hand.tapMovement = 0;
         hand._tapArmed = false;
         console.log(`📍 [TAP] Baseline set - zRel: ${zRel.toFixed(4)}`);
@@ -971,21 +971,21 @@
         // Too slow, reset baseline
         hand.zRelBaseline = zRel;
         hand.baselineTime = now;
-        hand.baselinePos = { x: hand.palm.x, y: hand.palm.y };
+        hand.baselinePos = { nx: hand.palm.nx, ny: hand.palm.ny };
         hand._tapArmed = false;
         return 0;
       }
 
       // Lateral movement guard: hand must not move sideways too much
       const lateral = Math.sqrt(
-        Math.pow((hand.palm.x - hand.baselinePos.x) * width, 2) +
-        Math.pow((hand.palm.y - hand.baselinePos.y) * height, 2)
+        Math.pow((hand.palm.nx - hand.baselinePos.nx) * width, 2) +
+        Math.pow((hand.palm.ny - hand.baselinePos.ny) * height, 2)
       );
       if (lateral > TAP.maxLateralPx) {
         // Too much lateral movement, reset baseline
         hand.zRelBaseline = zRel;
         hand.baselineTime = now;
-        hand.baselinePos = { x: hand.palm.x, y: hand.palm.y };
+        hand.baselinePos = { nx: hand.palm.nx, ny: hand.palm.ny };
         hand._tapArmed = false;
         console.log(`⚠️ [TAP] Lateral movement too large (${lateral.toFixed(1)}px), resetting baseline`);
         return 0;
@@ -1029,7 +1029,7 @@
       if (!hand._tapArmed && exited) {
         hand.zRelBaseline = zRel;
         hand.baselineTime = now;
-        hand.baselinePos = { x: hand.palm.x, y: hand.palm.y };
+        hand.baselinePos = { nx: hand.palm.nx, ny: hand.palm.ny };
       }
 
       // DEBUG: Log current values periodically
