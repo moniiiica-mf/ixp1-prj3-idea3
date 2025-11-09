@@ -300,11 +300,18 @@
 
     // Robust tap/double-tap detection configuration
     const TAP = {
-      movementThreshold: 0.02,   // minimum movement distance (normalized 0-1 coords) - LOWERED
-      cooldownMs: 200,            // cooldown after detecting a tap
-      minGapMs: 120,              // min gap between taps for double
-      maxGapMs: 450,              // max gap for double
-      velocityWindow: 8           // frames to track for velocity calculation - INCREASED
+      alpha: 0.45,          // EMA for zRel
+      vIn: 0.60,            // sec^-1, enter tap
+      vOut: 0.50,           // sec^-1, release
+      windowMs: 220,
+      refractoryMs: 180,
+      maxLateralPx: 60,
+      noiseWindowMs: 800,
+      kNoise: 5.0,
+      minTap: 0.018,
+      maxTap: 0.050,
+      doubleMinMs: 120,
+      doubleMaxMs: 360
     };
 
     // MediaPipe Hand landmark indices (0-20)
@@ -886,105 +893,166 @@
     function ensureTapState(hand) {
       if (hand._tapInit) return;
       hand._tapInit = true;
+      hand.tapState = 'idle';       // idle | in | commit
+      hand.zRelEMA = 0;              // smoothed relative z
+      hand.prevZRelEMA = 0;
+      hand.zSign = 0;                // auto-detected sign
+      hand.movementTotal = 0;        // MT: accumulated positive z-velocity
+      hand.threshold = TAP.minTap;   // TH: adaptive threshold
+      hand.noiseHistory = [];        // for noise floor tracking
+      hand.tapStartTime = 0;
+      hand.tapStartPos = { x: 0, y: 0 };
       hand.lastTapTime = 0;
-      hand.cooldownUntil = 0;
-      hand.positionHistory = [];  // Track recent positions for movement detection
-      hand.tapMovement = 0;       // For debugging
-      hand.tapSpeed = 0;          // For debugging
+      hand.refractoryUntil = 0;
+      hand.lateral = 0;
+      hand.vZ = 0;                   // current z-velocity
+      hand.pointWasReady = false;
     }
 
-    // Movement-based tap detector
-    // REQUIRES Point gesture - detects ANY movement of index finger
-    function detectTap(hand, width, height) {
+    // Compute relative z (index tip vs palm center) and auto-detect sign
+    function relativeZ(hand) {
+      const lm = hand.landmarks;
+      const tip = lm[LANDMARKS.INDEX_TIP];
+      const palm =
+        (lm[LANDMARKS.WRIST].z + lm[LANDMARKS.INDEX_MCP].z +
+         lm[LANDMARKS.MIDDLE_MCP].z + lm[LANDMARKS.RING_MCP].z +
+         lm[LANDMARKS.PINKY_MCP].z) / 5;
+
+      let zRel = tip.z - palm;
+      if (hand.zSign === 0) {
+        hand.zSign = (zRel < 0) ? -1 : 1;
+      }
+      return zRel * -hand.zSign; // positive = toward camera
+    }
+
+    // Update noise floor from frames without Point gesture
+    function updateNoiseFloor(hand, dt) {
+      const now = Date.now();
+      const isPoint = hand.gesture === 'Point';
+
+      // Only collect noise when NOT in Point gesture
+      if (!isPoint) {
+        hand.noiseHistory.push({ absVZ: Math.abs(hand.vZ), time: now });
+      }
+
+      // Keep only recent noise samples (within noise window)
+      hand.noiseHistory = hand.noiseHistory.filter(n => now - n.time <= TAP.noiseWindowMs);
+
+      // Compute median of abs(vZ) for noise floor
+      if (hand.noiseHistory.length > 0) {
+        const sorted = hand.noiseHistory.map(n => n.absVZ).sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        const noise = sorted.length % 2 === 0
+          ? (sorted[mid - 1] + sorted[mid]) / 2
+          : sorted[mid];
+
+        // Adaptive threshold: TH = clamp(minTap, k*noise, maxTap)
+        const rawTH = TAP.kNoise * Math.min(noise, 0.02);
+        hand.threshold = Math.max(TAP.minTap, Math.min(rawTH, TAP.maxTap));
+      }
+    }
+
+    // Tap detector with relative-depth signal and adaptive threshold
+    function detectTap(hand, width, height, dt) {
       ensureTapState(hand);
       const now = Date.now();
 
-      // Check cooldown
-      if (now < hand.cooldownUntil) {
+      // Check refractory period
+      if (now < hand.refractoryUntil) {
+        hand.movementTotal = 0; // Frozen during refractory
+        hand.vZ = 0;
         return 0;
       }
 
-      // CRITICAL: Only detect taps when in Point gesture
+      // Check if Point gesture is active
       const isPoint = hand.gesture === 'Point';
 
-      // If not pointing, clear history and return
-      if (!isPoint) {
-        hand.positionHistory = [];
-        hand.tapMovement = 0;
-        hand.tapSpeed = 0;
-        return 0;
-      }
+      // Compute relative z and velocity
+      const zRel = relativeZ(hand);
+      hand.zRelEMA = TAP.alpha * zRel + (1 - TAP.alpha) * (hand.zRelEMA || zRel);
+      const dzRel = hand.zRelEMA - (hand.prevZRelEMA || hand.zRelEMA);
+      hand.prevZRelEMA = hand.zRelEMA;
 
-      // Get current index finger tip position (normalized 0-1)
+      // Time-normalized z-velocity (units/sec)
+      hand.vZ = dt > 0 ? dzRel / dt : 0;
+
+      // Update noise floor
+      updateNoiseFloor(hand, dt);
+
+      // Get index tip position for lateral check
       const tip = hand.landmarks[LANDMARKS.INDEX_TIP];
-      const currentPos = {
-        x: tip.x,
-        y: tip.y,
-        z: tip.z,
-        time: now
-      };
+      const tipPx = { x: tip.x * width, y: tip.y * height };
 
-      // Add to history
-      hand.positionHistory.push(currentPos);
-
-      // Keep only recent positions (velocity window)
-      if (hand.positionHistory.length > TAP.velocityWindow) {
-        hand.positionHistory.shift();
-      }
-
-      // Need at least 2 positions to detect movement
-      if (hand.positionHistory.length < 2) {
+      // State machine: idle → in → commit
+      if (hand.tapState === 'idle') {
+        // Entry to "in" requires Point READY and vZ > vIn
+        if (isPoint && hand.vZ > TAP.vIn) {
+          hand.tapState = 'in';
+          hand.movementTotal = 0;
+          hand.tapStartTime = now;
+          hand.tapStartPos = { x: tipPx.x, y: tipPx.y };
+          hand.pointWasReady = true;
+          console.log(`[TAP] Entered 'in' state - vZ: ${hand.vZ.toFixed(3)}`);
+        }
         return 0;
       }
 
-      // Calculate total movement over the window
-      let totalMovement = 0;
-      for (let i = 1; i < hand.positionHistory.length; i++) {
-        const prev = hand.positionHistory[i - 1];
-        const curr = hand.positionHistory[i];
-
-        // 3D distance in normalized space
-        const dx = curr.x - prev.x;
-        const dy = curr.y - prev.y;
-        const dz = curr.z - prev.z;
-        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        totalMovement += dist;
-      }
-
-      // Calculate speed (movement per frame)
-      const speed = totalMovement / hand.positionHistory.length;
-
-      // Store for debugging
-      hand.tapMovement = totalMovement;
-      hand.tapSpeed = speed;
-
-      // Debug logging (only when Point gesture and enough history)
-      if (isPoint && hand.positionHistory.length >= TAP.velocityWindow) {
-        console.log(`[TAP DEBUG] Movement: ${totalMovement.toFixed(4)}, Threshold: ${TAP.movementThreshold}, History: ${hand.positionHistory.length}`);
-      }
-
-      // Detect tap: significant movement detected
-      if (totalMovement > TAP.movementThreshold) {
-        // Clear history to reset for next tap
-        hand.positionHistory = [];
-
-        // Set cooldown
-        hand.cooldownUntil = now + TAP.cooldownMs;
-
-        // Check for double tap
-        let count = 1;
-        if (hand.lastTapTime &&
-            (now - hand.lastTapTime >= TAP.minGapMs) &&
-            (now - hand.lastTapTime <= TAP.maxGapMs)) {
-          count = 2;
-          hand.lastTapTime = 0; // Reset
-        } else {
-          hand.lastTapTime = now;
+      if (hand.tapState === 'in') {
+        // Track if Point was ready at any point during this tap
+        if (isPoint) {
+          hand.pointWasReady = true;
         }
 
-        console.log(`[TAP DETECTED] Count: ${count}, Movement: ${totalMovement.toFixed(4)}`);
-        return count; // 1 or 2
+        // Accumulate only positive z-velocity (toward camera)
+        if (hand.vZ > 0 && dt > 0) {
+          hand.movementTotal += hand.vZ * dt;
+        }
+
+        // Calculate lateral movement
+        hand.lateral = Math.hypot(tipPx.x - hand.tapStartPos.x, tipPx.y - hand.tapStartPos.y);
+
+        const elapsed = now - hand.tapStartTime;
+        const exceededWindow = elapsed > TAP.windowMs;
+        const exceededLateral = hand.lateral > TAP.maxLateralPx;
+
+        // Release detected: vZ < -vOut
+        if (hand.vZ < -TAP.vOut) {
+          console.log(`[TAP] Release detected - MT: ${hand.movementTotal.toFixed(3)}, TH: ${hand.threshold.toFixed(3)}, lateral: ${hand.lateral.toFixed(1)}px, duration: ${elapsed}ms`);
+
+          hand.tapState = 'idle';
+
+          // Validate tap
+          if (!exceededWindow && !exceededLateral && hand.movementTotal >= hand.threshold && hand.pointWasReady) {
+            // Commit tap
+            let count = 1;
+            if (hand.lastTapTime &&
+                (now - hand.lastTapTime >= TAP.doubleMinMs) &&
+                (now - hand.lastTapTime <= TAP.doubleMaxMs)) {
+              count = 2;
+              hand.lastTapTime = 0;
+            } else {
+              hand.lastTapTime = now;
+            }
+
+            // Set refractory
+            hand.refractoryUntil = now + TAP.refractoryMs;
+
+            console.log(`[TAP] COMMITTED - Count: ${count}`);
+            return count;
+          } else {
+            console.log(`[TAP] Cancelled - exceededWindow: ${exceededWindow}, exceededLateral: ${exceededLateral}, MT < TH: ${hand.movementTotal < hand.threshold}`);
+          }
+        }
+
+        // Cancel if window exceeded or lateral drift too large
+        if (exceededWindow || exceededLateral) {
+          console.log(`[TAP] Cancelled - timeout or lateral`);
+          hand.tapState = 'idle';
+          hand.movementTotal = 0;
+          return 0;
+        }
+
+        // Cancel if index tip confidence drops (not implemented - MediaPipe doesn't expose per-landmark confidence easily)
       }
 
       return 0;
@@ -1237,7 +1305,7 @@
           }
 
           // Detect tap
-          const tapCount = detectTap(hand);
+          const tapCount = detectTap(hand, width, height, dt);
           if (tapCount > 0) {
             HandInput.emit('tap', {
               count: tapCount,
@@ -1583,22 +1651,27 @@
         if (hand._tapInit) {
           const isPoint = hand.gesture === 'Point';
           const pointColor = isPoint ? '#4aff4a' : '#ff4a4a';
-          const now = Date.now();
-          const inCooldown = now < hand.cooldownUntil;
-          const cooldownColor = inCooldown ? '#ffaa4a' : '#888';
+          const mtExceedsThreshold = hand.movementTotal >= hand.threshold;
+          const mtColor = mtExceedsThreshold ? '#4aff4a' : '#ff4a4a';
+          const thColor = hand.threshold <= hand.movementTotal ? '#4aff4a' : '#ff4a4a';
+          const stateColor = hand.tapState === 'in' ? '#ffaa4a' : hand.tapState === 'commit' ? '#4aff4a' : '#888';
 
-          html += `<div class="debug-row"><span class="debug-key">Point Gesture:</span><span class="debug-value" style="color: ${pointColor}; font-weight: bold;">`;
-          html += `${isPoint ? '✓ READY' : '✗ NOT READY'}`;
+          html += `<div class="debug-row"><span class="debug-key">Point READY:</span><span class="debug-value" style="color: ${pointColor}; font-weight: bold;">`;
+          html += `${isPoint ? '✓' : '✗'}`;
           html += `</span></div>`;
-          html += `<div class="debug-row"><span class="debug-key">Tap Cooldown:</span><span class="debug-value" style="color: ${cooldownColor}; font-weight: bold;">`;
-          html += `${inCooldown ? 'ACTIVE' : 'IDLE'}`;
+          html += `<div class="debug-row"><span class="debug-key">Movement Total:</span><span class="debug-value" style="color: ${mtColor}; font-weight: bold;">`;
+          html += `${hand.movementTotal.toFixed(3)}`;
           html += `</span></div>`;
-          html += `<div class="debug-row"><span class="debug-key">Movement:</span><span class="debug-value" style="font-size: 10px;">`;
-          html += `Total:${hand.tapMovement.toFixed(3)} `;
-          html += `Speed:${hand.tapSpeed.toFixed(3)}`;
+          html += `<div class="debug-row"><span class="debug-key">Threshold:</span><span class="debug-value" style="color: ${thColor}; font-weight: bold;">`;
+          html += `${hand.threshold.toFixed(3)}`;
           html += `</span></div>`;
-          html += `<div class="debug-row"><span class="debug-key">Threshold:</span><span class="debug-value" style="font-size: 10px; color: ${hand.tapMovement > TAP.movementThreshold ? '#4aff4a' : '#ff4a4a'}">`;
-          html += `${TAP.movementThreshold.toFixed(3)} (${hand.tapMovement > TAP.movementThreshold ? 'EXCEEDED' : 'below'})`;
+          html += `<div class="debug-row"><span class="debug-key">Tap State:</span><span class="debug-value" style="color: ${stateColor}">`;
+          html += `${hand.tapState.toUpperCase()}`;
+          html += `</span></div>`;
+          html += `<div class="debug-row"><span class="debug-key">Tap Details:</span><span class="debug-value" style="font-size: 10px;">`;
+          html += `zRel:${hand.zRelEMA.toFixed(2)} `;
+          html += `vZ:${hand.vZ.toFixed(2)} `;
+          html += `lat:${hand.lateral.toFixed(0)}px`;
           html += `</span></div>`;
         }
 
