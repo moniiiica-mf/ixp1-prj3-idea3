@@ -300,10 +300,11 @@
 
     // Simple tap detection configuration
     const TAP = {
-      minMovement: 0.02,     // minimum zRel change to trigger tap
-      maxMovement: 0.08,     // maximum zRel change (prevents swipes from triggering)
+      minMovement: 0.015,    // minimum zRel change to trigger tap (lowered for better detection)
+      maxMovement: 0.12,     // maximum zRel change (widened to allow faster jabs)
       cooldownMs: 300,       // cooldown after tap
-      maxLateralPx: 100,     // max lateral movement allowed
+      maxLateralPx: 100,     // max lateral movement allowed (in pixels)
+      tapWindowMs: 200,      // max time for tap motion (ms)
       doubleMinMs: 120,      // min gap for double tap
       doubleMaxMs: 400       // max gap for double tap
     };
@@ -783,10 +784,11 @@
         gesture = 'OpenPalm';
         confidence = 0.92;
       }
-      // 4. Point gesture (only index extended)
-      else if (indexExt && !middleExt && !ringExt && !pinkyExt) {
+      // 4. Point gesture (index extended, others curled, thumb can be anything)
+      // Loosened: allow slightly extended middle finger if mostly curled
+      else if (indexExt && !ringExt && !pinkyExt && middleCurl > 0.5) {
         gesture = 'Point';
-        confidence = 0.88;
+        confidence = 0.84;
       }
       // 5. PartialOpen - Only if clearly NOT a fist (soft extension band)
       // Check: at least 1 finger in the "soft open" zone (extension 0.4-0.7)
@@ -893,6 +895,9 @@
       hand.cooldownUntil = 0;        // cooldown timestamp
       hand.lastTapTime = 0;          // for double-tap detection
       hand.tapMovement = 0;          // current zRel movement from baseline (for debug)
+      hand._tapArmed = false;        // hysteresis state for tap arming
+      hand.baselineTime = 0;         // timestamp when baseline was set (for time guard)
+      hand.baselinePos = { x: 0, y: 0 }; // palm position when baseline was set (for lateral guard)
     }
 
     // Compute relative z (index tip vs palm center) and auto-detect sign
@@ -904,40 +909,51 @@
          lm[LANDMARKS.MIDDLE_MCP].z + lm[LANDMARKS.RING_MCP].z +
          lm[LANDMARKS.PINKY_MCP].z) / 5;
 
-      let zRel = tip.z - palm;
+      let raw = tip.z - palm;
       if (hand.zSign === 0) {
-        hand.zSign = (zRel < 0) ? -1 : 1;
+        hand.zSign = (raw < 0) ? -1 : 1;
       }
-      return zRel * -hand.zSign; // positive = toward camera
+      // Apply smoothing to reduce noise, then apply sign correction
+      const zRelSmoothed = ema(raw * -hand.zSign, `${hand.id}_zrel`, 0.4);
+      return zRelSmoothed; // positive = toward camera
     }
 
-    // Simple tap detector: triggers when zRel changes by 0.02-0.08 during Point gesture
+    // Improved tap detector with hysteresis, time/lateral guards, and double-tap support
     function detectTap(hand, width, height, dtSec) {
       ensureTapState(hand);
       const now = Date.now();
+      const gap = now - (hand.lastTapTime || 0);
 
-      // Check cooldown
-      if (now < hand.cooldownUntil) {
+      // Allow second tap through even during cooldown if within double-tap window
+      const allowDoubleWindow = hand.lastTapTime &&
+        gap >= TAP.doubleMinMs && gap <= TAP.doubleMaxMs;
+
+      if (now < hand.cooldownUntil && !allowDoubleWindow) {
         return 0;
       }
 
-      const isPoint = hand.gesture === 'Point';
+      // Accept Point or PartialOpen gestures (less strict gating)
+      const isPointish = (hand.gesture === 'Point' || hand.gesture === 'PartialOpen');
 
-      // Get current zRel
+      // Get current zRel (now smoothed)
       const zRel = relativeZ(hand);
 
-      // If not Point gesture, reset baseline
-      if (!isPoint) {
+      // If not Point-ish gesture, reset state
+      if (!isPointish) {
         hand.baselineSet = false;
         hand.tapMovement = 0;
+        hand._tapArmed = false;
         return 0;
       }
 
-      // Point gesture is active - set baseline if not set
+      // Point-ish gesture is active - set baseline if not set
       if (!hand.baselineSet) {
         hand.zRelBaseline = zRel;
         hand.baselineSet = true;
+        hand.baselineTime = now;
+        hand.baselinePos = { x: hand.palm.x, y: hand.palm.y };
         hand.tapMovement = 0;
+        hand._tapArmed = false;
         console.log(`📍 [TAP] Baseline set - zRel: ${zRel.toFixed(4)}`);
         return 0;
       }
@@ -946,38 +962,82 @@
       const movement = zRel - hand.zRelBaseline;
       hand.tapMovement = movement; // Store for debug panel
 
-      // DEBUG: Log current values
-      if (!hand._debugLogThrottle) {
-        console.log(`[DEBUG] Point READY - movement: ${movement.toFixed(4)}, range: ${TAP.minMovement}-${TAP.maxMovement}`);
-        hand._debugLogThrottle = true;
-        setTimeout(() => hand._debugLogThrottle = false, 200);
+      // Hysteresis thresholds
+      const entered = movement >= TAP.minMovement;
+      const exited = movement <= TAP.minMovement * 0.4;
+
+      // Time guard: tap must happen within tapWindowMs
+      if (now - hand.baselineTime > TAP.tapWindowMs) {
+        // Too slow, reset baseline
+        hand.zRelBaseline = zRel;
+        hand.baselineTime = now;
+        hand.baselinePos = { x: hand.palm.x, y: hand.palm.y };
+        hand._tapArmed = false;
+        return 0;
       }
 
-      // Check if movement is in tap range (0.02 to 0.08)
-      if (movement >= TAP.minMovement && movement <= TAP.maxMovement) {
+      // Lateral movement guard: hand must not move sideways too much
+      const lateral = Math.sqrt(
+        Math.pow((hand.palm.x - hand.baselinePos.x) * width, 2) +
+        Math.pow((hand.palm.y - hand.baselinePos.y) * height, 2)
+      );
+      if (lateral > TAP.maxLateralPx) {
+        // Too much lateral movement, reset baseline
+        hand.zRelBaseline = zRel;
+        hand.baselineTime = now;
+        hand.baselinePos = { x: hand.palm.x, y: hand.palm.y };
+        hand._tapArmed = false;
+        console.log(`⚠️ [TAP] Lateral movement too large (${lateral.toFixed(1)}px), resetting baseline`);
+        return 0;
+      }
+
+      // Arm tap when entering the detection band
+      if (!hand._tapArmed && entered && movement <= TAP.maxMovement) {
+        hand._tapArmed = true;
+        console.log(`🎯 [TAP] Armed - movement: ${movement.toFixed(4)}`);
+      }
+
+      // Trigger tap when armed and still in valid range
+      if (hand._tapArmed && movement >= TAP.minMovement && movement <= TAP.maxMovement) {
         // Tap detected!
-        hand.baselineSet = false; // Reset baseline
+        hand._tapArmed = false;
+        hand.baselineSet = false;
         hand.cooldownUntil = now + TAP.cooldownMs;
 
         // Check for double tap
         let count = 1;
         if (hand.lastTapTime &&
-            (now - hand.lastTapTime >= TAP.doubleMinMs) &&
-            (now - hand.lastTapTime <= TAP.doubleMaxMs)) {
+            gap >= TAP.doubleMinMs &&
+            gap <= TAP.doubleMaxMs) {
           count = 2;
-          hand.lastTapTime = 0;
+          hand.lastTapTime = 0; // Reset after double tap
         } else {
           hand.lastTapTime = now;
         }
 
-        console.log(`✅ [TAP] DETECTED - Count: ${count}, movement: ${movement.toFixed(4)}`);
+        console.log(`✅ [TAP] DETECTED - Count: ${count}, movement: ${movement.toFixed(4)}, lateral: ${lateral.toFixed(1)}px`);
         return count;
       }
 
-      // If movement exceeds max, reset baseline (probably a swipe)
-      if (movement > TAP.maxMovement) {
+      // Disarm if overshoot (but keep baseline for potential retry)
+      if (hand._tapArmed && movement > TAP.maxMovement) {
+        hand._tapArmed = false;
+        console.log(`⚠️ [TAP] Overshot (${movement.toFixed(4)}), disarmed but keeping baseline`);
+      }
+
+      // If pulled back too far while not armed, refresh baseline
+      if (!hand._tapArmed && exited) {
         hand.zRelBaseline = zRel;
-        console.log(`⚠️ [TAP] Movement too large (${movement.toFixed(4)}), resetting baseline`);
+        hand.baselineTime = now;
+        hand.baselinePos = { x: hand.palm.x, y: hand.palm.y };
+      }
+
+      // DEBUG: Log current values periodically
+      if (!hand._debugLogThrottle) {
+        const status = hand._tapArmed ? '🎯 ARMED' : '⏳ waiting';
+        console.log(`[DEBUG] ${status} - movement: ${movement.toFixed(4)}, lateral: ${lateral.toFixed(1)}px, range: ${TAP.minMovement}-${TAP.maxMovement}`);
+        hand._debugLogThrottle = true;
+        setTimeout(() => hand._debugLogThrottle = false, 200);
       }
 
       return 0;
@@ -1575,22 +1635,23 @@
 
         // Add Tap-specific debug info (ALWAYS SHOW)
         if (hand._tapInit) {
-          const isPoint = hand.gesture === 'Point';
-          const pointColor = isPoint ? '#4aff4a' : '#ff4a4a';
+          const isPointish = hand.gesture === 'Point' || hand.gesture === 'PartialOpen';
+          const gestureColor = isPointish ? '#4aff4a' : '#ff4a4a';
           const inRange = hand.tapMovement >= TAP.minMovement && hand.tapMovement <= TAP.maxMovement;
           const movementColor = inRange ? '#4aff4a' : (hand.tapMovement > TAP.maxMovement ? '#ff4a4a' : '#ffaa4a');
+          const armedColor = hand._tapArmed ? '#4aff4a' : '#888';
 
-          html += `<div class="debug-row"><span class="debug-key">Point READY:</span><span class="debug-value" style="color: ${pointColor}; font-weight: bold;">`;
-          html += `${isPoint ? '✓' : '✗'}`;
+          html += `<div class="debug-row"><span class="debug-key">Gesture OK:</span><span class="debug-value" style="color: ${gestureColor}; font-weight: bold;">`;
+          html += `${isPointish ? '✓ ' + hand.gesture : '✗ ' + hand.gesture}`;
+          html += `</span></div>`;
+          html += `<div class="debug-row"><span class="debug-key">Tap Armed:</span><span class="debug-value" style="color: ${armedColor}; font-weight: bold;">`;
+          html += `${hand._tapArmed ? '🎯 YES' : '⏳ NO'}`;
           html += `</span></div>`;
           html += `<div class="debug-row"><span class="debug-key">Movement:</span><span class="debug-value" style="color: ${movementColor}; font-weight: bold;">`;
           html += `${hand.tapMovement.toFixed(4)}`;
           html += `</span></div>`;
           html += `<div class="debug-row"><span class="debug-key">Tap Range:</span><span class="debug-value" style="font-size: 11px;">`;
-          html += `${TAP.minMovement.toFixed(2)} - ${TAP.maxMovement.toFixed(2)}`;
-          html += `</span></div>`;
-          html += `<div class="debug-row"><span class="debug-key">Baseline Set:</span><span class="debug-value">`;
-          html += `${hand.baselineSet ? '✓ YES' : '✗ NO'}`;
+          html += `${TAP.minMovement.toFixed(3)} - ${TAP.maxMovement.toFixed(3)}`;
           html += `</span></div>`;
         }
 
