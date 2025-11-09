@@ -298,20 +298,14 @@
       draw: { skeleton: true, landmarks: true, labels: true }
     };
 
-    // Robust tap/double-tap detection configuration
+    // Simple tap detection configuration
     const TAP = {
-      alpha: 0.45,          // EMA for zRel
-      vIn: 0.30,            // sec^-1, enter tap (LOWERED for testing)
-      vOut: 0.25,           // sec^-1, release (LOWERED for testing)
-      windowMs: 300,        // increased for testing
-      refractoryMs: 160,    // lowered from 180
-      maxLateralPx: 100,    // increased for testing
-      noiseWindowMs: 800,
-      kNoise: 5.0,
-      minTap: 0.010,        // LOWERED for testing
-      maxTap: 0.050,
-      doubleMinMs: 120,
-      doubleMaxMs: 360
+      minMovement: 0.02,     // minimum zRel change to trigger tap
+      maxMovement: 0.08,     // maximum zRel change (prevents swipes from triggering)
+      cooldownMs: 300,       // cooldown after tap
+      maxLateralPx: 100,     // max lateral movement allowed
+      doubleMinMs: 120,      // min gap for double tap
+      doubleMaxMs: 400       // max gap for double tap
     };
 
     // MediaPipe Hand landmark indices (0-20)
@@ -893,20 +887,12 @@
     function ensureTapState(hand) {
       if (hand._tapInit) return;
       hand._tapInit = true;
-      hand.tapState = 'idle';       // idle | in | commit
-      hand.zRelEMA = 0;              // smoothed relative z
-      hand.prevZRelEMA = 0;
-      hand.zSign = 0;                // auto-detected sign
-      hand.movementTotal = 0;        // MT: accumulated positive z-velocity
-      hand.threshold = TAP.minTap;   // TH: adaptive threshold
-      hand.noiseHistory = [];        // for noise floor tracking
-      hand.tapStartTime = 0;
-      hand.tapStartPos = { x: 0, y: 0 };
-      hand.lastTapTime = 0;
-      hand.refractoryUntil = 0;
-      hand.lateral = 0;
-      hand.vZ = 0;                   // current z-velocity
-      hand.pointWasReady = false;
+      hand.zSign = 0;                // auto-detected sign for z direction
+      hand.zRelBaseline = 0;         // baseline zRel when Point gesture detected
+      hand.baselineSet = false;      // whether we've set baseline yet
+      hand.cooldownUntil = 0;        // cooldown timestamp
+      hand.lastTapTime = 0;          // for double-tap detection
+      hand.tapMovement = 0;          // current zRel movement from baseline (for debug)
     }
 
     // Compute relative z (index tip vs palm center) and auto-detect sign
@@ -925,129 +911,73 @@
       return zRel * -hand.zSign; // positive = toward camera
     }
 
-    // Update noise floor from frames without Point gesture
-    function updateNoiseFloor(hand, dt) {
-      const now = Date.now();
-      const isPoint = hand.gesture === 'Point';
-
-      // Only collect noise when NOT in Point gesture
-      if (!isPoint) {
-        hand.noiseHistory.push({ absVZ: Math.abs(hand.vZ), time: now });
-      }
-
-      // Keep only recent noise samples (within noise window)
-      hand.noiseHistory = hand.noiseHistory.filter(n => now - n.time <= TAP.noiseWindowMs);
-
-      // Compute median of abs(vZ) for noise floor
-      if (hand.noiseHistory.length > 0) {
-        const sorted = hand.noiseHistory.map(n => n.absVZ).sort((a, b) => a - b);
-        const mid = Math.floor(sorted.length / 2);
-        const noise = sorted.length % 2 === 0
-          ? (sorted[mid - 1] + sorted[mid]) / 2
-          : sorted[mid];
-
-        // Adaptive threshold: TH = clamp(minTap, k*noise, maxTap)
-        const rawTH = TAP.kNoise * Math.min(noise, 0.02);
-        hand.threshold = Math.max(TAP.minTap, Math.min(rawTH, TAP.maxTap));
-      }
-    }
-
-    // Tap detector with relative-depth signal and adaptive threshold
+    // Simple tap detector: triggers when zRel changes by 0.02-0.08 during Point gesture
     function detectTap(hand, width, height, dtSec) {
       ensureTapState(hand);
       const now = Date.now();
 
-      // Check refractory period
-      if (now < hand.refractoryUntil) {
-        hand.movementTotal = 0;
-        hand.vZ = 0;
+      // Check cooldown
+      if (now < hand.cooldownUntil) {
         return 0;
       }
 
       const isPoint = hand.gesture === 'Point';
 
-      // Compute relative z and velocity
+      // Get current zRel
       const zRel = relativeZ(hand);
-      hand.zRelEMA = TAP.alpha * zRel + (1 - TAP.alpha) * (hand.zRelEMA || zRel);
-      const dzRel = hand.zRelEMA - (hand.prevZRelEMA || hand.zRelEMA);
-      hand.prevZRelEMA = hand.zRelEMA;
 
-      // ✅ vZ in units/sec (dtSec is already in seconds)
-      hand.vZ = dtSec > 0 ? dzRel / dtSec : 0;
+      // If not Point gesture, reset baseline
+      if (!isPoint) {
+        hand.baselineSet = false;
+        hand.tapMovement = 0;
+        return 0;
+      }
 
-      // Update noise floor
-      updateNoiseFloor(hand, dtSec);
+      // Point gesture is active - set baseline if not set
+      if (!hand.baselineSet) {
+        hand.zRelBaseline = zRel;
+        hand.baselineSet = true;
+        hand.tapMovement = 0;
+        console.log(`📍 [TAP] Baseline set - zRel: ${zRel.toFixed(4)}`);
+        return 0;
+      }
 
-      // Get index tip position for lateral check
-      const tip = hand.landmarks[LANDMARKS.INDEX_TIP];
-      const tipPx = { x: tip.x * width, y: tip.y * height };
+      // Calculate movement from baseline (positive = toward camera)
+      const movement = zRel - hand.zRelBaseline;
+      hand.tapMovement = movement; // Store for debug panel
 
-      // DEBUG: Log every frame when Point gesture is active
-      if (isPoint && !hand._debugLogThrottle) {
-        console.log(`[DEBUG] Point READY - State: ${hand.tapState}, vZ: ${hand.vZ.toFixed(3)}, MT: ${hand.movementTotal.toFixed(3)}, TH: ${hand.threshold.toFixed(3)}, vIn: ${TAP.vIn}`);
+      // DEBUG: Log current values
+      if (!hand._debugLogThrottle) {
+        console.log(`[DEBUG] Point READY - movement: ${movement.toFixed(4)}, range: ${TAP.minMovement}-${TAP.maxMovement}`);
         hand._debugLogThrottle = true;
-        setTimeout(() => hand._debugLogThrottle = false, 100); // Log every 100ms
+        setTimeout(() => hand._debugLogThrottle = false, 200);
       }
 
-      // State machine: idle → in
-      if (hand.tapState === 'idle') {
-        // ✅ allow fallback entry if Point wasn't detected but there's a clear forward spike
-        const entryOk = (isPoint && hand.vZ > TAP.vIn) || (!isPoint && hand.vZ > (TAP.vIn * 1.1));
-        if (entryOk) {
-          hand.tapState = 'in';
-          hand.movementTotal = 0;
-          hand.tapStartTime = now;
-          hand.tapStartPos = { x: tipPx.x, y: tipPx.y };
-          hand.pointWasReady = isPoint;
-          console.log(`🟢 [TAP] Entered IN state - vZ: ${hand.vZ.toFixed(3)}, isPoint: ${isPoint}`);
-          return 0;
-        }
-        return 0;
-      }
+      // Check if movement is in tap range (0.02 to 0.08)
+      if (movement >= TAP.minMovement && movement <= TAP.maxMovement) {
+        // Tap detected!
+        hand.baselineSet = false; // Reset baseline
+        hand.cooldownUntil = now + TAP.cooldownMs;
 
-      // 'in' state
-      if (hand.vZ > 0 && dtSec > 0) {
-        // ✅ integrate with seconds
-        hand.movementTotal += hand.vZ * dtSec;
-        console.log(`🔵 [TAP] Accumulating MT - vZ: ${hand.vZ.toFixed(3)}, dtSec: ${dtSec.toFixed(4)}, MT: ${hand.movementTotal.toFixed(3)}`);
-      }
-
-      hand.lateral = Math.hypot(tipPx.x - hand.tapStartPos.x, tipPx.y - hand.tapStartPos.y);
-
-      const elapsed = now - hand.tapStartTime;
-      const exceededWindow = elapsed > TAP.windowMs;
-      const exceededLateral = hand.lateral > TAP.maxLateralPx;
-
-      // Release detected: vZ < -vOut
-      if (hand.vZ < -TAP.vOut) {
-        hand.tapState = 'idle';
-
-        // Accept if MT beats TH, inside window, and lateral is small
-        if (!exceededWindow && !exceededLateral && hand.movementTotal >= hand.threshold) {
-          let count = 1;
-          if (hand.lastTapTime &&
-              (now - hand.lastTapTime >= TAP.doubleMinMs) &&
-              (now - hand.lastTapTime <= TAP.doubleMaxMs)) {
-            count = 2;
-            hand.lastTapTime = 0;
-          } else {
-            hand.lastTapTime = now;
-          }
-          hand.refractoryUntil = now + TAP.refractoryMs;
-          console.log(`[TAP] COMMITTED - Count: ${count}, MT: ${hand.movementTotal.toFixed(3)}, TH: ${hand.threshold.toFixed(3)}`);
-          return count;
+        // Check for double tap
+        let count = 1;
+        if (hand.lastTapTime &&
+            (now - hand.lastTapTime >= TAP.doubleMinMs) &&
+            (now - hand.lastTapTime <= TAP.doubleMaxMs)) {
+          count = 2;
+          hand.lastTapTime = 0;
         } else {
-          hand.movementTotal = 0;
-          console.log(`[TAP] Cancelled - window: ${exceededWindow}, lateral: ${exceededLateral}, MT: ${hand.movementTotal.toFixed(3)}, TH: ${hand.threshold.toFixed(3)}`);
-          return 0;
+          hand.lastTapTime = now;
         }
+
+        console.log(`✅ [TAP] DETECTED - Count: ${count}, movement: ${movement.toFixed(4)}`);
+        return count;
       }
 
-      // Cancel if window exceeded or lateral drift too large
-      if (exceededWindow || exceededLateral) {
-        hand.tapState = 'idle';
-        hand.movementTotal = 0;
-        return 0;
+      // If movement exceeds max, reset baseline (probably a swipe)
+      if (movement > TAP.maxMovement) {
+        hand.zRelBaseline = zRel;
+        console.log(`⚠️ [TAP] Movement too large (${movement.toFixed(4)}), resetting baseline`);
       }
 
       return 0;
@@ -1647,27 +1577,20 @@
         if (hand._tapInit) {
           const isPoint = hand.gesture === 'Point';
           const pointColor = isPoint ? '#4aff4a' : '#ff4a4a';
-          const mtExceedsThreshold = hand.movementTotal >= hand.threshold;
-          const mtColor = mtExceedsThreshold ? '#4aff4a' : '#ff4a4a';
-          const thColor = hand.threshold <= hand.movementTotal ? '#4aff4a' : '#ff4a4a';
-          const stateColor = hand.tapState === 'in' ? '#ffaa4a' : hand.tapState === 'commit' ? '#4aff4a' : '#888';
+          const inRange = hand.tapMovement >= TAP.minMovement && hand.tapMovement <= TAP.maxMovement;
+          const movementColor = inRange ? '#4aff4a' : (hand.tapMovement > TAP.maxMovement ? '#ff4a4a' : '#ffaa4a');
 
           html += `<div class="debug-row"><span class="debug-key">Point READY:</span><span class="debug-value" style="color: ${pointColor}; font-weight: bold;">`;
           html += `${isPoint ? '✓' : '✗'}`;
           html += `</span></div>`;
-          html += `<div class="debug-row"><span class="debug-key">Movement Total:</span><span class="debug-value" style="color: ${mtColor}; font-weight: bold;">`;
-          html += `${hand.movementTotal.toFixed(3)}`;
+          html += `<div class="debug-row"><span class="debug-key">Movement:</span><span class="debug-value" style="color: ${movementColor}; font-weight: bold;">`;
+          html += `${hand.tapMovement.toFixed(4)}`;
           html += `</span></div>`;
-          html += `<div class="debug-row"><span class="debug-key">Threshold:</span><span class="debug-value" style="color: ${thColor}; font-weight: bold;">`;
-          html += `${hand.threshold.toFixed(3)}`;
+          html += `<div class="debug-row"><span class="debug-key">Tap Range:</span><span class="debug-value" style="font-size: 11px;">`;
+          html += `${TAP.minMovement.toFixed(2)} - ${TAP.maxMovement.toFixed(2)}`;
           html += `</span></div>`;
-          html += `<div class="debug-row"><span class="debug-key">Tap State:</span><span class="debug-value" style="color: ${stateColor}">`;
-          html += `${hand.tapState.toUpperCase()}`;
-          html += `</span></div>`;
-          html += `<div class="debug-row"><span class="debug-key">Tap Details:</span><span class="debug-value" style="font-size: 10px;">`;
-          html += `zRel:${hand.zRelEMA.toFixed(2)} `;
-          html += `vZ:${hand.vZ.toFixed(2)} `;
-          html += `lat:${hand.lateral.toFixed(0)}px`;
+          html += `<div class="debug-row"><span class="debug-key">Baseline Set:</span><span class="debug-value">`;
+          html += `${hand.baselineSet ? '✓ YES' : '✗ NO'}`;
           html += `</span></div>`;
         }
 
