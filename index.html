@@ -1753,28 +1753,28 @@
       console.log(`[SWIPE ${data.direction.toUpperCase()}] Speed: ${data.speed.toFixed(0)} px/s`);
     });
 
-    // Tap orb animation setup
+    // Tap orb animation setup - ✅ FIXED to use canvas rect
     const tapOrb = document.getElementById('tapOrb');
     let hideTimeout;
 
     HandInput.on('tap', (data) => {
       const isDouble = data.count === 2;
-      const { nx, ny, count } = data;
+      const { nx, ny } = data;
 
-      // Map normalized coords (0–1) → screen px
-      const x = nx * window.innerWidth;
-      const y = ny * window.innerHeight;
+      // Map normalized coords (0–1) to the canvas' actual on-screen box
+      const rect = canvas.getBoundingClientRect();
+      const x = rect.left + nx * rect.width;
+      const y = rect.top  + ny * rect.height;
 
       // Move the orb to tap position
       tapOrb.style.left = `${x}px`;
-      tapOrb.style.top = `${y}px`;
+      tapOrb.style.top  = `${y}px`;
 
-      // Trigger animation
+      // Animate
       tapOrb.classList.remove('active');
       void tapOrb.offsetWidth; // reset transition
       tapOrb.classList.add('active');
 
-      // Hide orb again after 0.5s
       clearTimeout(hideTimeout);
       hideTimeout = setTimeout(() => tapOrb.classList.remove('active'), 500);
 
@@ -1783,9 +1783,11 @@
 
     HandInput.on('pinch', (data) => {
       if (data.state === 'start') {
+        // Map normalized coords to canvas' actual on-screen box
+        const rect = canvas.getBoundingClientRect();
         demoState.pinchRings.push({
-          x: data.nx * canvas.width,
-          y: data.ny * canvas.height,
+          x: rect.left + data.nx * rect.width,
+          y: rect.top  + data.ny * rect.height,
           time: Date.now()
         });
         console.log(`[PINCH ${data.state.toUpperCase()}] Distance: ${data.distance.toFixed(1)}px`);
@@ -2096,11 +2098,15 @@
     // ========================================
     // MOUSE FALLBACK FOR TESTING
     // ========================================
-    window.addEventListener('click', (e) => {
-      const nx = e.clientX / window.innerWidth;
-      const ny = e.clientY / window.innerHeight;
-      HandInput.emit('tap', { nx, ny, count: 1 });
-    });
+    // Only fire when in fallback mode to avoid confusing debug with camera active
+    if (state.useFallback) {
+      window.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const nx = (e.clientX - rect.left) / rect.width;
+        const ny = (e.clientY - rect.top)  / rect.height;
+        HandInput.emit('tap', { nx, ny, count: 1 });
+      });
+    }
 
     // ========================================
     // INITIALIZATION
