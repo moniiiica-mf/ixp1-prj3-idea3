@@ -301,14 +301,14 @@
     // Robust tap/double-tap detection configuration
     const TAP = {
       alpha: 0.45,          // EMA for zRel
-      vIn: 0.60,            // sec^-1, enter tap
-      vOut: 0.50,           // sec^-1, release
-      windowMs: 220,
-      refractoryMs: 180,
-      maxLateralPx: 60,
+      vIn: 0.50,            // sec^-1, enter tap (lowered from 0.60)
+      vOut: 0.45,           // sec^-1, release (lowered from 0.50)
+      windowMs: 240,        // increased from 220
+      refractoryMs: 160,    // lowered from 180
+      maxLateralPx: 80,     // increased from 60
       noiseWindowMs: 800,
       kNoise: 5.0,
-      minTap: 0.018,
+      minTap: 0.015,        // lowered from 0.018
       maxTap: 0.050,
       doubleMinMs: 120,
       doubleMaxMs: 360
@@ -953,18 +953,17 @@
     }
 
     // Tap detector with relative-depth signal and adaptive threshold
-    function detectTap(hand, width, height, dt) {
+    function detectTap(hand, width, height, dtSec) {
       ensureTapState(hand);
       const now = Date.now();
 
       // Check refractory period
       if (now < hand.refractoryUntil) {
-        hand.movementTotal = 0; // Frozen during refractory
+        hand.movementTotal = 0;
         hand.vZ = 0;
         return 0;
       }
 
-      // Check if Point gesture is active
       const isPoint = hand.gesture === 'Point';
 
       // Compute relative z and velocity
@@ -973,86 +972,73 @@
       const dzRel = hand.zRelEMA - (hand.prevZRelEMA || hand.zRelEMA);
       hand.prevZRelEMA = hand.zRelEMA;
 
-      // Time-normalized z-velocity (units/sec)
-      hand.vZ = dt > 0 ? dzRel / dt : 0;
+      // ✅ vZ in units/sec (dtSec is already in seconds)
+      hand.vZ = dtSec > 0 ? dzRel / dtSec : 0;
 
       // Update noise floor
-      updateNoiseFloor(hand, dt);
+      updateNoiseFloor(hand, dtSec);
 
       // Get index tip position for lateral check
       const tip = hand.landmarks[LANDMARKS.INDEX_TIP];
       const tipPx = { x: tip.x * width, y: tip.y * height };
 
-      // State machine: idle → in → commit
+      // State machine: idle → in
       if (hand.tapState === 'idle') {
-        // Entry to "in" requires Point READY and vZ > vIn
-        if (isPoint && hand.vZ > TAP.vIn) {
+        // ✅ allow fallback entry if Point wasn't detected but there's a clear forward spike
+        const entryOk = (isPoint && hand.vZ > TAP.vIn) || (!isPoint && hand.vZ > (TAP.vIn * 1.1));
+        if (entryOk) {
           hand.tapState = 'in';
           hand.movementTotal = 0;
           hand.tapStartTime = now;
           hand.tapStartPos = { x: tipPx.x, y: tipPx.y };
-          hand.pointWasReady = true;
-          console.log(`[TAP] Entered 'in' state - vZ: ${hand.vZ.toFixed(3)}`);
+          hand.pointWasReady = isPoint;
+          return 0;
         }
         return 0;
       }
 
-      if (hand.tapState === 'in') {
-        // Track if Point was ready at any point during this tap
-        if (isPoint) {
-          hand.pointWasReady = true;
-        }
+      // 'in' state
+      if (hand.vZ > 0 && dtSec > 0) {
+        // ✅ integrate with seconds
+        hand.movementTotal += hand.vZ * dtSec;
+      }
 
-        // Accumulate only positive z-velocity (toward camera)
-        if (hand.vZ > 0 && dt > 0) {
-          hand.movementTotal += hand.vZ * dt;
-        }
+      hand.lateral = Math.hypot(tipPx.x - hand.tapStartPos.x, tipPx.y - hand.tapStartPos.y);
 
-        // Calculate lateral movement
-        hand.lateral = Math.hypot(tipPx.x - hand.tapStartPos.x, tipPx.y - hand.tapStartPos.y);
+      const elapsed = now - hand.tapStartTime;
+      const exceededWindow = elapsed > TAP.windowMs;
+      const exceededLateral = hand.lateral > TAP.maxLateralPx;
 
-        const elapsed = now - hand.tapStartTime;
-        const exceededWindow = elapsed > TAP.windowMs;
-        const exceededLateral = hand.lateral > TAP.maxLateralPx;
+      // Release detected: vZ < -vOut
+      if (hand.vZ < -TAP.vOut) {
+        hand.tapState = 'idle';
 
-        // Release detected: vZ < -vOut
-        if (hand.vZ < -TAP.vOut) {
-          console.log(`[TAP] Release detected - MT: ${hand.movementTotal.toFixed(3)}, TH: ${hand.threshold.toFixed(3)}, lateral: ${hand.lateral.toFixed(1)}px, duration: ${elapsed}ms`);
-
-          hand.tapState = 'idle';
-
-          // Validate tap
-          if (!exceededWindow && !exceededLateral && hand.movementTotal >= hand.threshold && hand.pointWasReady) {
-            // Commit tap
-            let count = 1;
-            if (hand.lastTapTime &&
-                (now - hand.lastTapTime >= TAP.doubleMinMs) &&
-                (now - hand.lastTapTime <= TAP.doubleMaxMs)) {
-              count = 2;
-              hand.lastTapTime = 0;
-            } else {
-              hand.lastTapTime = now;
-            }
-
-            // Set refractory
-            hand.refractoryUntil = now + TAP.refractoryMs;
-
-            console.log(`[TAP] COMMITTED - Count: ${count}`);
-            return count;
+        // Accept if MT beats TH, inside window, and lateral is small
+        if (!exceededWindow && !exceededLateral && hand.movementTotal >= hand.threshold) {
+          let count = 1;
+          if (hand.lastTapTime &&
+              (now - hand.lastTapTime >= TAP.doubleMinMs) &&
+              (now - hand.lastTapTime <= TAP.doubleMaxMs)) {
+            count = 2;
+            hand.lastTapTime = 0;
           } else {
-            console.log(`[TAP] Cancelled - exceededWindow: ${exceededWindow}, exceededLateral: ${exceededLateral}, MT < TH: ${hand.movementTotal < hand.threshold}`);
+            hand.lastTapTime = now;
           }
-        }
-
-        // Cancel if window exceeded or lateral drift too large
-        if (exceededWindow || exceededLateral) {
-          console.log(`[TAP] Cancelled - timeout or lateral`);
-          hand.tapState = 'idle';
+          hand.refractoryUntil = now + TAP.refractoryMs;
+          console.log(`[TAP] COMMITTED - Count: ${count}, MT: ${hand.movementTotal.toFixed(3)}, TH: ${hand.threshold.toFixed(3)}`);
+          return count;
+        } else {
           hand.movementTotal = 0;
+          console.log(`[TAP] Cancelled - window: ${exceededWindow}, lateral: ${exceededLateral}, MT: ${hand.movementTotal.toFixed(3)}, TH: ${hand.threshold.toFixed(3)}`);
           return 0;
         }
+      }
 
-        // Cancel if index tip confidence drops (not implemented - MediaPipe doesn't expose per-landmark confidence easily)
+      // Cancel if window exceeded or lateral drift too large
+      if (exceededWindow || exceededLateral) {
+        hand.tapState = 'idle';
+        hand.movementTotal = 0;
+        return 0;
       }
 
       return 0;
@@ -1304,8 +1290,9 @@
             });
           }
 
-          // Detect tap
-          const tapCount = detectTap(hand, width, height, dt);
+          // Detect tap (convert dt from ms to seconds)
+          const dtSec = dt / 1000;
+          const tapCount = detectTap(hand, width, height, dtSec);
           if (tapCount > 0) {
             HandInput.emit('tap', {
               count: tapCount,
