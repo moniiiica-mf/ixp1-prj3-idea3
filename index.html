@@ -784,11 +784,10 @@
         gesture = 'OpenPalm';
         confidence = 0.92;
       }
-      // 4. Point gesture (index extended, others curled, thumb can be anything)
-      // Loosened: allow slightly extended middle finger if mostly curled
-      else if (indexExt && !ringExt && !pinkyExt && middleCurl > 0.5) {
+      // 4. Point gesture (only index extended, others curled)
+      else if (indexExt && !middleExt && !ringExt && !pinkyExt) {
         gesture = 'Point';
-        confidence = 0.84;
+        confidence = 0.88;
       }
       // 5. PartialOpen - Only if clearly NOT a fist (soft extension band)
       // Check: at least 1 finger in the "soft open" zone (extension 0.4-0.7)
