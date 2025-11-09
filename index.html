@@ -300,13 +300,13 @@
 
     // Simple tap detection configuration
     const TAP = {
-      minMovement: 0.015,    // minimum zRel change to trigger tap (lowered for better detection)
-      maxMovement: 0.12,     // maximum zRel change (widened to allow faster jabs)
-      cooldownMs: 300,       // cooldown after tap
-      maxLateralPx: 100,     // max lateral movement allowed (in pixels)
-      tapWindowMs: 200,      // max time for tap motion (ms)
-      doubleMinMs: 120,      // min gap for double tap
-      doubleMaxMs: 400       // max gap for double tap
+      minMovement: 0.010,    // minimum zRel change to trigger tap
+      maxMovement: 0.14,     // maximum zRel change (widened to allow faster jabs)
+      cooldownMs: 260,       // cooldown after tap
+      maxLateralPx: 120,     // max lateral movement allowed (in pixels)
+      tapWindowMs: 230,      // max time for tap motion (ms)
+      doubleMinMs: 110,      // min gap for double tap
+      doubleMaxMs: 420       // max gap for double tap
     };
 
     // MediaPipe Hand landmark indices (0-20)
@@ -725,6 +725,36 @@
     function recognizeGesture(hand, width, height) {
       const { landmarks } = hand;
 
+      // Robust extension scores (0=curled, 1=straight)
+      const sIndex = fingerExtensionScore(
+        landmarks[LANDMARKS.INDEX_MCP],
+        landmarks[LANDMARKS.INDEX_PIP],
+        landmarks[LANDMARKS.INDEX_DIP],
+        landmarks[LANDMARKS.INDEX_TIP]
+      );
+      const sMiddle = fingerExtensionScore(
+        landmarks[LANDMARKS.MIDDLE_MCP],
+        landmarks[LANDMARKS.MIDDLE_PIP],
+        landmarks[LANDMARKS.MIDDLE_DIP],
+        landmarks[LANDMARKS.MIDDLE_TIP]
+      );
+      const sRing = fingerExtensionScore(
+        landmarks[LANDMARKS.RING_MCP],
+        landmarks[LANDMARKS.RING_PIP],
+        landmarks[LANDMARKS.RING_DIP],
+        landmarks[LANDMARKS.RING_TIP]
+      );
+      const sPinky = fingerExtensionScore(
+        landmarks[LANDMARKS.PINKY_MCP],
+        landmarks[LANDMARKS.PINKY_PIP],
+        landmarks[LANDMARKS.PINKY_DIP],
+        landmarks[LANDMARKS.PINKY_TIP]
+      );
+
+      // Soft criterion for "point": index extended, others curled
+      const looksLikePoint =
+        sIndex > 0.62 && sMiddle < 0.38 && sRing < 0.38 && sPinky < 0.38;
+
       // Get hand size for normalization
       const handSize = getHandSize(landmarks);
 
@@ -784,27 +814,29 @@
         gesture = 'OpenPalm';
         confidence = 0.92;
       }
-      // 4. Point gesture (only index extended, others curled)
-      else if (indexExt && !middleExt && !ringExt && !pinkyExt) {
+      // 4. Point — use robust scores, ignore thumb state
+      else if (looksLikePoint) {
         gesture = 'Point';
-        confidence = 0.88;
+        // Confidence maps how clearly the "others" are curled and index is straight
+        const nonIndexCurl = 1 - ((sMiddle + sRing + sPinky) / 3);
+        confidence = Math.min(0.95, 0.55 + 0.45 * Math.min(1, sIndex) * Math.max(0, nonIndexCurl));
       }
-      // 5. PartialOpen - Only if clearly NOT a fist (soft extension band)
-      // Check: at least 1 finger in the "soft open" zone (extension 0.4-0.7)
-      else if (fistResult.extras) {
+      // 5. PartialOpen — only if it's NOT a point
+      else if (!looksLikePoint && fistResult.extras) {
+        const ext = fistResult.extras;
         const softOpenCount =
-          (fistResult.extras.extIndex > 0.4 && fistResult.extras.extIndex < 0.7 ? 1 : 0) +
-          (fistResult.extras.extMiddle > 0.4 && fistResult.extras.extMiddle < 0.7 ? 1 : 0) +
-          (fistResult.extras.extRing > 0.4 && fistResult.extras.extRing < 0.7 ? 1 : 0) +
-          (fistResult.extras.extPinky > 0.4 && fistResult.extras.extPinky < 0.7 ? 1 : 0);
+          (ext.extIndex > 0.4 && ext.extIndex < 0.7 ? 1 : 0) +
+          (ext.extMiddle > 0.4 && ext.extMiddle < 0.7 ? 1 : 0) +
+          (ext.extRing > 0.4 && ext.extRing < 0.7 ? 1 : 0) +
+          (ext.extPinky > 0.4 && ext.extPinky < 0.7 ? 1 : 0);
 
-        if (softOpenCount >= 1 && fistResult.extras.curledCount < 3) {
+        if (softOpenCount >= 1 && ext.curledCount < 3) {
           gesture = 'PartialOpen';
           confidence = 0.72;
         }
       }
-      // 6. Fallback PartialOpen using handCurl (only if fist check failed decisively)
-      else if (handCurl < 0.50 && handSpread > 0.25 && !fistResult.isFist) {
+      // 6. Fallback PartialOpen — only if NOT a point
+      else if (!looksLikePoint && handCurl < 0.50 && handSpread > 0.25 && !fistResult.isFist) {
         gesture = 'PartialOpen';
         confidence = 0.70;
       }
@@ -814,6 +846,8 @@
       hand.handCurl = handCurl;
       hand.fingerCurls = { index: indexCurl, middle: middleCurl, ring: ringCurl, pinky: pinkyCurl };
       hand.fingerExtensions = { thumb: thumbExt, index: indexExt, middle: middleExt, ring: ringExt, pinky: pinkyExt };
+      hand.extensionScores = { index: sIndex, middle: sMiddle, ring: sRing, pinky: sPinky }; // Cosine-based scores
+      hand.looksLikePoint = looksLikePoint;
       hand.fistDetected = fistResult.isFist;
       hand.fistConfidence = fistResult.confidence;
 
@@ -888,7 +922,6 @@
     function ensureTapState(hand) {
       if (hand._tapInit) return;
       hand._tapInit = true;
-      hand.zSign = 0;                // auto-detected sign for z direction
       hand.zRelBaseline = 0;         // baseline zRel when Point gesture detected
       hand.baselineSet = false;      // whether we've set baseline yet
       hand.cooldownUntil = 0;        // cooldown timestamp
@@ -899,7 +932,7 @@
       hand.baselinePos = { nx: 0, ny: 0 }; // palm position when baseline was set (for lateral guard)
     }
 
-    // Compute relative z (index tip vs palm center) and auto-detect sign
+    // Compute relative z (index tip vs palm center), positive = toward camera
     function relativeZ(hand) {
       const lm = hand.landmarks;
       const tip = lm[LANDMARKS.INDEX_TIP];
@@ -908,13 +941,10 @@
          lm[LANDMARKS.MIDDLE_MCP].z + lm[LANDMARKS.RING_MCP].z +
          lm[LANDMARKS.PINKY_MCP].z) / 5;
 
-      let raw = tip.z - palm;
-      if (hand.zSign === 0) {
-        hand.zSign = (raw < 0) ? -1 : 1;
-      }
-      // Apply smoothing to reduce noise, then apply sign correction
-      const zRelSmoothed = ema(raw * -hand.zSign, `${hand.id}_zrel`, 0.4);
-      return zRelSmoothed; // positive = toward camera
+      // MediaPipe: more negative = closer to camera.
+      // Flip sign so "toward camera" is positive for our tap logic.
+      const rawToward = -(tip.z - palm); // >0 when jabbing forward
+      return ema(rawToward, `${hand.id}_zrel`, 0.4);
     }
 
     // Improved tap detector with hysteresis, time/lateral guards, and double-tap support
@@ -1629,6 +1659,18 @@
           html += `M:${f.extMiddle.toFixed(2)} `;
           html += `R:${f.extRing.toFixed(2)} `;
           html += `P:${f.extPinky.toFixed(2)}`;
+          html += `</span></div>`;
+        }
+
+        // Add extension scores (ALWAYS SHOW if available)
+        if (hand.extensionScores) {
+          const s = hand.extensionScores;
+          const pointColor = hand.looksLikePoint ? '#4aff4a' : '#888';
+          html += `<div class="debug-row"><span class="debug-key">ExtScore:</span><span class="debug-value" style="font-size: 10px;">`;
+          html += `I:${s.index.toFixed(2)} M:${s.middle.toFixed(2)} R:${s.ring.toFixed(2)} P:${s.pinky.toFixed(2)}`;
+          html += `</span></div>`;
+          html += `<div class="debug-row"><span class="debug-key">Point Match:</span><span class="debug-value" style="color: ${pointColor}; font-weight: bold;">`;
+          html += `${hand.looksLikePoint ? '✓ YES' : '✗ NO'}`;
           html += `</span></div>`;
         }
 
