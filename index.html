@@ -279,7 +279,7 @@
     // ========================================
 
     // Toggle to disable pinch visual feedback (pink rings) while keeping gesture detection
-    const ENABLE_PINCH_VISUALS = false; // Set to false to hide pinch rings during tap prototyping
+    const ENABLE_PINCH_VISUALS = true; // Set to false to hide pinch rings during tap prototyping
 
     const CONFIG = {
       mirrorVideo: true,
@@ -289,7 +289,7 @@
       lostTimeoutMs: 220,
       swipeSpeedPxPerSec: 800,  // Lowered from 1400 for easier detection
       swipeAngleToleranceDeg: 45, // Increased tolerance
-      pinchPx: 40,  // Lowered from 55 to reduce accidental pinch triggers during tapping
+      pinchPx: 55,  // Distance threshold for pinch detection
       pinchHoldMs: 220,
       tapDeltaZ: 0.08,  // Lowered for easier tap detection
       tapWindowMs: 250,  // Increased window
@@ -820,22 +820,22 @@
         gesture = 'Fist';
         confidence = Math.max(0.85, fistResult.confidence);
       }
-      // 2. Point — use robust scores, ignore thumb state (MOVED UP to prioritize over Pinch for tap detection)
+      // 2. Pinch (highest priority when close) - but only if not a fist
+      else if (pinchDist < CONFIG.pinchPx) {
+        gesture = 'Pinch';
+        confidence = Math.max(0.75, 1 - pinchDist / CONFIG.pinchPx);
+      }
+      // 3. Open Palm (all extended with low curl and high spread)
+      else if ((allExtended || fourExtended) && handCurl < 0.35 && handSpread > 0.35) {
+        gesture = 'OpenPalm';
+        confidence = 0.92;
+      }
+      // 4. Point — use robust scores, ignore thumb state
       else if (looksLikePoint) {
         gesture = 'Point';
         // Confidence maps how clearly the "others" are curled and index is straight
         const nonIndexCurl = 1 - ((sMiddle + sRing + sPinky) / 3);
         confidence = Math.min(0.95, 0.55 + 0.45 * Math.min(1, sIndex) * Math.max(0, nonIndexCurl));
-      }
-      // 3. Pinch (now gated by posture to prevent false triggers during tapping)
-      else if (pinchDist < CONFIG.pinchPx && looksPinchPosture(hand)) {
-        gesture = 'Pinch';
-        confidence = Math.max(0.75, 1 - pinchDist / CONFIG.pinchPx);
-      }
-      // 4. Open Palm (all extended with low curl and high spread)
-      else if ((allExtended || fourExtended) && handCurl < 0.35 && handSpread > 0.35) {
-        gesture = 'OpenPalm';
-        confidence = 0.92;
       }
       // 5. PartialOpen — only if it's NOT a point
       else if (!looksLikePoint && fistResult.extras) {
