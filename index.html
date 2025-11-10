@@ -277,6 +277,10 @@
     // ========================================
     // CONFIGURATION
     // ========================================
+
+    // Toggle to disable pinch visual feedback (pink rings) while keeping gesture detection
+    const ENABLE_PINCH_VISUALS = false; // Set to false to hide pinch rings during tap prototyping
+
     const CONFIG = {
       mirrorVideo: true,
       maxHands: 2,
@@ -285,7 +289,7 @@
       lostTimeoutMs: 220,
       swipeSpeedPxPerSec: 800,  // Lowered from 1400 for easier detection
       swipeAngleToleranceDeg: 45, // Increased tolerance
-      pinchPx: 55,
+      pinchPx: 40,  // Lowered from 55 to reduce accidental pinch triggers during tapping
       pinchHoldMs: 220,
       tapDeltaZ: 0.08,  // Lowered for easier tap detection
       tapWindowMs: 250,  // Increased window
@@ -300,11 +304,11 @@
 
     // Simple tap detection configuration
     const TAP = {
-      minMovement: 0.010,    // minimum zRel change to trigger tap
-      maxMovement: 0.14,     // maximum zRel change (widened to allow faster jabs)
+      minMovement: 0.015,    // minimum zRel change to trigger tap (slightly more separation from noise)
+      maxMovement: 0.18,     // maximum zRel change (allow stronger jabs)
       cooldownMs: 260,       // cooldown after tap
-      maxLateralPx: 120,     // max lateral movement allowed (in pixels)
-      tapWindowMs: 230,      // max time for tap motion (ms)
+      maxLateralPx: 200,     // max lateral movement allowed (more forgiving for natural hand drift)
+      tapWindowMs: 300,      // max time for tap motion (allow slightly slower jab)
       doubleMinMs: 110,      // min gap for double tap
       doubleMaxMs: 420       // max gap for double tap
     };
@@ -722,6 +726,18 @@
     // ========================================
     // GESTURE RECOGNITION
     // ========================================
+
+    // Check if hand posture looks like a pinch (thumb+index extended, others relaxed)
+    // This prevents accidental pinch detection from incidental finger contact during tapping
+    function looksPinchPosture(hand) {
+      const s = hand.extensionScores || {};
+      // index and thumb extended-ish, others not strongly extended
+      const thumbExtended = hand.fingerExtensions?.thumb;
+      const indexExtended = s.index > 0.55;
+      const othersRelaxed = (s.middle < 0.55) && (s.ring < 0.55) && (s.pinky < 0.55);
+      return !!thumbExtended && indexExtended && othersRelaxed;
+    }
+
     function recognizeGesture(hand, width, height) {
       const { landmarks } = hand;
 
@@ -804,22 +820,22 @@
         gesture = 'Fist';
         confidence = Math.max(0.85, fistResult.confidence);
       }
-      // 2. Pinch (highest priority when close) - but only if not a fist
-      else if (pinchDist < CONFIG.pinchPx) {
-        gesture = 'Pinch';
-        confidence = Math.max(0.75, 1 - pinchDist / CONFIG.pinchPx);
-      }
-      // 3. Open Palm (all extended with low curl and high spread)
-      else if ((allExtended || fourExtended) && handCurl < 0.35 && handSpread > 0.35) {
-        gesture = 'OpenPalm';
-        confidence = 0.92;
-      }
-      // 4. Point — use robust scores, ignore thumb state
+      // 2. Point — use robust scores, ignore thumb state (MOVED UP to prioritize over Pinch for tap detection)
       else if (looksLikePoint) {
         gesture = 'Point';
         // Confidence maps how clearly the "others" are curled and index is straight
         const nonIndexCurl = 1 - ((sMiddle + sRing + sPinky) / 3);
         confidence = Math.min(0.95, 0.55 + 0.45 * Math.min(1, sIndex) * Math.max(0, nonIndexCurl));
+      }
+      // 3. Pinch (now gated by posture to prevent false triggers during tapping)
+      else if (pinchDist < CONFIG.pinchPx && looksPinchPosture(hand)) {
+        gesture = 'Pinch';
+        confidence = Math.max(0.75, 1 - pinchDist / CONFIG.pinchPx);
+      }
+      // 4. Open Palm (all extended with low curl and high spread)
+      else if ((allExtended || fourExtended) && handCurl < 0.35 && handSpread > 0.35) {
+        gesture = 'OpenPalm';
+        confidence = 0.92;
       }
       // 5. PartialOpen — only if it's NOT a point
       else if (!looksLikePoint && fistResult.extras) {
@@ -944,7 +960,7 @@
       // MediaPipe: more negative = closer to camera.
       // Flip sign so "toward camera" is positive for our tap logic.
       const rawToward = -(tip.z - palm); // >0 when jabbing forward
-      return ema(rawToward, `${hand.id}_zrel`, 0.4);
+      return ema(rawToward, `${hand.id}_zrel`, 0.6); // Higher alpha (0.6) for faster response to jabs
     }
 
     // Improved tap detector with hysteresis, time/lateral guards, and double-tap support
@@ -961,8 +977,8 @@
         return 0;
       }
 
-      // Accept Point or PartialOpen gestures (less strict gating)
-      const isPointish = (hand.gesture === 'Point' || hand.gesture === 'PartialOpen');
+      // Only arm taps on Point gesture (strict gating to reduce false positives)
+      const isPointish = (hand.gesture === 'Point');
 
       // Get current zRel (now smoothed)
       const zRel = relativeZ(hand);
@@ -1782,6 +1798,9 @@
     });
 
     HandInput.on('pinch', (data) => {
+      // Skip visual feedback if disabled (gesture label still works)
+      if (!ENABLE_PINCH_VISUALS) return;
+
       if (data.state === 'start') {
         // Map normalized coords to canvas' actual on-screen box
         const rect = canvas.getBoundingClientRect();
